@@ -8,6 +8,9 @@ dependencies = [
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
   "uvicorn>=0.34",
+  "sqlalchemy>=2.0",
+  "aiosqlite>=0.22",
+  "alembic>=1.14",
 ]
 
 [dependency-groups]
