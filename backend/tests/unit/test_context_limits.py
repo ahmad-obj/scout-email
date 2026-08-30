@@ -33,6 +33,24 @@ def test_writer_context_contains_only_approved_bounded_sections():
     assert "secret_internal_note" not in rendered
 
 
+def test_writer_context_allows_recent_sent_structures_without_other_message_data():
+    source = {
+        "dossier_summary": {"business": "Acme Dental"},
+        "recent_sent_structures": [
+            "Noticed the booking action is hard to spot. Want me to send one idea?"
+        ],
+        "recent_full_messages": [
+            {"recipient_email": "private@example.com", "raw_html": "<html>no</html>"}
+        ],
+    }
+
+    context = build_writer_context(source)
+
+    assert context["recent_sent_structures"] == source["recent_sent_structures"]
+    assert "recent_full_messages" not in context
+    assert "private@example.com" not in str(context)
+
+
 def test_sanitize_context_removes_raw_html_recursively_and_applies_text_budget():
     source = {
         "summary": "A" * 500,
