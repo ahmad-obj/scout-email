@@ -37,10 +37,9 @@ class OpportunityScoreComponents(StrictModel):
 
 class OpportunityCandidate(StrictModel):
     problem: str = Field(min_length=1)
-    severity: float = Field(ge=0.0, le=1.0)
-    business_impact: float = Field(ge=0.0, le=1.0)
-    confidence: float = Field(ge=0.0, le=1.0)
+    angle: str = Field(min_length=1)
     evidence_ids: list[PositiveId] = Field(min_length=1)
+    score: OpportunityScoreComponents
     safe_to_reference: bool = False
 
 
