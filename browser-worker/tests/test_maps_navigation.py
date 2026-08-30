@@ -1,6 +1,5 @@
-from browser_worker.maps import _maps_search_url
+from browser_worker.maps import SEARCH_INPUT_SELECTORS
 
 
-def test_maps_search_url_encodes_query_as_path_segment():
-    assert _maps_search_url("dentist Lahore") == "https://www.google.com/maps/search/dentist%20Lahore"
-    assert _maps_search_url("dental clinic / Lahore") == "https://www.google.com/maps/search/dental%20clinic%20%2F%20Lahore"
+def test_search_input_selectors_include_generic_text_input_fallback():
+    assert SEARCH_INPUT_SELECTORS[-1] == 'input[type="text"]'
