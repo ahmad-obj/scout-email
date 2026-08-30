@@ -62,3 +62,10 @@ def test_migration_creates_message_idempotency_constraint(tmp_path):
     with sqlite3.connect(db_path) as conn:
         indexes = conn.execute("PRAGMA index_list('outbound_messages')").fetchall()
     assert any(row[2] == 1 for row in indexes), indexes
+
+
+def test_migration_persists_campaign_policy_table(tmp_path):
+    db_path = _upgrade(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info('campaign_policies')")}
+    assert {"campaign_id", "qualification_json", "follow_up_json"} <= columns

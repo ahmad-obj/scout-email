@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 
 from scout_email.db.base import Base
 from scout_email.db import models  # noqa: F401
+from scout_email.campaigns import models as campaign_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
@@ -35,6 +36,7 @@ def run_migrations_online() -> None:
         context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=connection.dialect.name == "sqlite")
         with context.begin_transaction():
             context.run_migrations()
+        connection.commit()
 
 
 if context.is_offline_mode():
