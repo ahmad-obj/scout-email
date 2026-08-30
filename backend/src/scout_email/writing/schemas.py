@@ -40,17 +40,30 @@ class DraftClaim(StrictModel):
         return self
 
 
-class EmailDraftOutput(StrictModel):
+class WriterModelOutput(StrictModel):
+    """Structured content produced by the model before trusted metadata is attached."""
+
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=8000)
-    claims: list[DraftClaim] = Field(default_factory=list)
+    claims: list[DraftClaim] = Field(min_length=1)
     strategy_label: str = Field(min_length=1, max_length=200)
+
+    @field_validator("subject", "body", "strategy_label")
+    @classmethod
+    def strip_model_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("text must not be blank")
+        return stripped
+
+
+class EmailDraftOutput(WriterModelOutput):
     prompt_version: str = Field(min_length=1, max_length=80)
     playbook_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
-    @field_validator("subject", "body", "strategy_label", "prompt_version")
+    @field_validator("prompt_version")
     @classmethod
-    def strip_text(cls, value: str) -> str:
+    def strip_prompt_version(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             raise ValueError("text must not be blank")
