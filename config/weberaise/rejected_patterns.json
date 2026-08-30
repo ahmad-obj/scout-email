@@ -1,0 +1,11 @@
+[
+  {"pattern":"I hope this message finds you well","reason":"Generic cold-email opening with no researched relevance."},
+  {"pattern":"I hope this email finds you well","reason":"Generic cold-email opening with no researched relevance."},
+  {"pattern":"I recently came across","reason":"Generic discovery framing; use the actual evidence-backed observation instead."},
+  {"pattern":"in today's digital landscape","reason":"Generic marketing filler."},
+  {"pattern":"elevate your online presence","reason":"Generic agency language without a specific business observation."},
+  {"pattern":"take your business to the next level","reason":"Vague promise with no concrete meaning."},
+  {"pattern":"seamless user experience","reason":"Overused marketing phrase unless a specific evidenced UX fact requires it."},
+  {"pattern":"unlock your potential","reason":"Generic promotional language."},
+  {"pattern":"transform your digital presence","reason":"Generic agency language without an evidence-backed angle."}
+]
