@@ -34,9 +34,29 @@ async def test_live_maps_smoke_returns_at_most_three_normalized_leads(tmp_path):
                 print("MAPS_DIAGNOSTIC_URL=", page.url)
                 print("MAPS_DIAGNOSTIC_TITLE=", await page.title())
                 inputs = await page.locator("input").evaluate_all(
-                    "els => els.map(e => ({id:e.id, aria:e.getAttribute('aria-label'), placeholder:e.getAttribute('placeholder'), type:e.type}))"
+                    """els => els.map(e => {
+                        const r = e.getBoundingClientRect();
+                        const s = getComputedStyle(e);
+                        return {
+                            id: e.id,
+                            aria: e.getAttribute('aria-label'),
+                            placeholder: e.getAttribute('placeholder'),
+                            type: e.type,
+                            disabled: e.disabled,
+                            readOnly: e.readOnly,
+                            display: s.display,
+                            visibility: s.visibility,
+                            opacity: s.opacity,
+                            rect: {x:r.x, y:r.y, width:r.width, height:r.height},
+                            outer: e.outerHTML.slice(0, 400),
+                        };
+                    })"""
                 )
                 print("MAPS_DIAGNOSTIC_INPUTS=", inputs)
+                buttons = await page.locator("button").evaluate_all(
+                    "els => els.slice(0, 30).map(e => ({aria:e.getAttribute('aria-label'), title:e.getAttribute('title'), text:(e.innerText || '').trim().slice(0,80)}))"
+                )
+                print("MAPS_DIAGNOSTIC_BUTTONS=", buttons)
                 text = (await page.locator("body").inner_text())[:800]
                 print("MAPS_DIAGNOSTIC_TEXT=", text.replace("\n", " | "))
             raise
