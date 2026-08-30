@@ -44,3 +44,25 @@ jobs:
       - name: Run browser worker tests
         working-directory: browser-worker
         run: pytest -q
+
+  live-maps-smoke:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-maps]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install browser worker
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./browser-worker
+          pip install pytest pytest-asyncio
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run one bounded live Maps query
+        working-directory: browser-worker
+        env:
+          MAPS_LIVE_SMOKE_ENABLED: "true"
+        run: pytest tests/test_maps_live.py -q
