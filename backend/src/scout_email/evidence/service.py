@@ -16,12 +16,12 @@ class UnsafeArtifactPathError(ValueError):
 
 
 class BrowserRenderer(Protocol):
-    async def render(
+    async def capture_homepage_screenshots(
         self,
         url: str,
         *,
-        viewport: str = "desktop",
-        screenshot_path: str | None = None,
+        desktop_path: str,
+        mobile_path: str,
     ): ...
 
 
@@ -142,22 +142,31 @@ class EvidenceService:
                 )
             )
 
-        screenshot_rows: list[Screenshot] = []
+        screenshot_paths: dict[str, tuple[Path, Path]] = {}
         for viewport in ("desktop", "mobile"):
-            absolute_path = build_screenshot_path(
+            absolute = build_screenshot_path(
                 self.data_root,
                 campaign_id=campaign_id,
                 lead_id=lead_id,
                 viewport=viewport,
             )
-            relative_path = absolute_path.relative_to(self.data_root)
-            absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            absolute.parent.mkdir(parents=True, exist_ok=True)
+            screenshot_paths[viewport] = (absolute, absolute.relative_to(self.data_root))
 
-            await self.browser_client.render(
+        if not all(absolute.exists() for absolute, _relative in screenshot_paths.values()):
+            await self.browser_client.capture_homepage_screenshots(
                 homepage_url,
-                viewport=viewport,
-                screenshot_path=relative_path.as_posix(),
+                desktop_path=screenshot_paths["desktop"][1].as_posix(),
+                mobile_path=screenshot_paths["mobile"][1].as_posix(),
             )
+
+        screenshot_rows: list[Screenshot] = []
+        for viewport in ("desktop", "mobile"):
+            absolute_path, relative_path = screenshot_paths[viewport]
+            if not absolute_path.exists():
+                raise FileNotFoundError(
+                    f"browser worker did not create expected {viewport} screenshot artifact"
+                )
 
             screenshot = await self.session.scalar(
                 select(Screenshot).where(
