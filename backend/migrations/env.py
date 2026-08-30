@@ -4,9 +4,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from scout_email.db.base import Base
-from scout_email.db import models  # noqa: F401
 from scout_email.campaigns import models as campaign_models  # noqa: F401
+from scout_email.db import models  # noqa: F401
+from scout_email.db.base import Base
+from scout_email.jobs import models as job_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
@@ -21,7 +22,12 @@ def _migration_url() -> str:
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=_migration_url(), target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})
+    context.configure(
+        url=_migration_url(),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -29,11 +35,19 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _migration_url()
-    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        section,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
     with connectable.connect() as connection:
         if connection.dialect.name == "sqlite":
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=connection.dialect.name == "sqlite")
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=connection.dialect.name == "sqlite",
+        )
         with context.begin_transaction():
             context.run_migrations()
         connection.commit()
