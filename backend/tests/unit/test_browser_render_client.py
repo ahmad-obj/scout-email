@@ -55,3 +55,36 @@ async def test_render_malformed_success_response_is_not_retried():
             await worker.render("https://example.com/")
 
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_capture_homepage_screenshots_always_requests_desktop_then_mobile():
+    payloads: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "final_url": payload["url"],
+                "title": "Acme",
+                "html": "<html></html>",
+                "screenshot_path": f"/shared/{payload['screenshot_path']}",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        worker = BrowserWorkerClient("http://worker", client=client, max_attempts=1)
+        results = await worker.capture_homepage_screenshots(
+            "https://example.com/",
+            desktop_path="campaigns/7/leads/31/screenshots/homepage-desktop.png",
+            mobile_path="campaigns/7/leads/31/screenshots/homepage-mobile.png",
+        )
+
+    assert [item["viewport"] for item in payloads] == ["desktop", "mobile"]
+    assert [item["screenshot_path"] for item in payloads] == [
+        "campaigns/7/leads/31/screenshots/homepage-desktop.png",
+        "campaigns/7/leads/31/screenshots/homepage-mobile.png",
+    ]
+    assert len(results) == 2
