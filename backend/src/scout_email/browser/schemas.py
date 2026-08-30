@@ -11,3 +11,10 @@ class BrowserMapLead(BaseModel):
     review_count: int | None = Field(default=None, ge=0)
     maps_url: str | None = None
     source_external_id: str | None = None
+
+
+class BrowserRenderResponse(BaseModel):
+    final_url: str = Field(min_length=1)
+    title: str | None = None
+    html: str
+    screenshot_path: str | None = None
