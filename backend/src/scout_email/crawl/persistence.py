@@ -37,6 +37,7 @@ class CrawlPersistenceService:
                     "calls_to_action": page.calls_to_action,
                     "forms": page.forms,
                     "links": page.links,
+                    "images": page.images,
                     "technical_signals": page.technical_signals,
                     "browser_fallback_required": page.url in fallback_urls,
                 },
