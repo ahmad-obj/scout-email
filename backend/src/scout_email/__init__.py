@@ -1,0 +1,1 @@
+"""Scout Email backend package."""
