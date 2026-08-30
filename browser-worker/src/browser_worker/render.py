@@ -81,6 +81,14 @@ def resolve_screenshot_path(root: Path, requested: str) -> Path:
     return candidate
 
 
+def viewport_dimensions(viewport: str) -> dict[str, int]:
+    if viewport == "mobile":
+        return {"width": 390, "height": 844}
+    if viewport == "desktop":
+        return {"width": 1440, "height": 900}
+    raise ValueError("viewport must be desktop or mobile")
+
+
 async def install_network_guard(page: Page) -> None:
     cache: dict[str, bool] = {}
 
@@ -113,11 +121,7 @@ async def render_page(
 ) -> RenderResponse:
     url = str(request.url)
     await asyncio.to_thread(validate_public_url, url, resolve_dns=True)
-    viewport = (
-        {"width": 390, "height": 844}
-        if request.viewport == "mobile"
-        else {"width": 1440, "height": 1000}
-    )
+    viewport = viewport_dimensions(request.viewport)
 
     async with runtime.page(viewport=viewport) as page:
         await install_network_guard(page)
