@@ -30,3 +30,6 @@ packages = ["src/browser_worker"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "live_maps: opt-in bounded smoke test against live Google Maps",
+]
