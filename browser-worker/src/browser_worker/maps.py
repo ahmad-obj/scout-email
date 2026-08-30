@@ -17,13 +17,9 @@ _REVIEWS_TEXT_RE = re.compile(r"(?P<count>[\d,]+)\s*reviews?", re.I)
 _EXTERNAL_ID_RE = re.compile(r"(?:^|!)1s(?P<id>0x[0-9a-f]+:0x[0-9a-f]+)", re.I)
 
 # Playwright selectors are centralized here so Maps DOM drift is isolated.
-# The generic text input is intentionally last: some headless Maps variants
-# render the search box without the legacy id/aria-label, but expose exactly
-# one visible text input in the Maps shell.
 SEARCH_INPUT_SELECTORS = (
     "#searchboxinput",
     'input[aria-label*="Search Google Maps"]',
-    'input[type="text"]',
 )
 RESULT_FEED_SELECTORS = (
     'div[role="feed"]',
@@ -185,6 +181,34 @@ async def _first_visible(page, selectors: tuple[str, ...]):
     return None
 
 
+async def _find_search_input(page, selectors: tuple[str, ...] = SEARCH_INPUT_SELECTORS):
+    """Return a confidently identified Maps search input or None.
+
+    Stable selectors win. For headless Maps variants that strip the legacy id and
+    aria-label, accept a bare text/search input only when exactly one such input is
+    visible, avoiding arbitrary selection on ambiguous pages.
+    """
+    known = await _first_visible(page, selectors)
+    if known is not None:
+        return known
+
+    collection = page.locator('input[type="text"], input[type="search"]')
+    try:
+        count = await collection.count()
+    except Exception:
+        return None
+
+    visible = []
+    for index in range(count):
+        candidate = collection.nth(index)
+        try:
+            if await candidate.is_visible():
+                visible.append(candidate)
+        except Exception:
+            continue
+    return visible[0] if len(visible) == 1 else None
+
+
 async def _dismiss_consent(page) -> None:
     for label in ("Accept all", "I agree", "Accept"):
         try:
@@ -251,7 +275,7 @@ async def search_maps(runtime, query: str, max_results: int = 25) -> list[Browse
             await page.goto("https://www.google.com/maps", wait_until="domcontentloaded")
             await _dismiss_consent(page)
 
-            search_input = await _first_visible(page, SEARCH_INPUT_SELECTORS)
+            search_input = await _find_search_input(page)
             if search_input is None:
                 raise MapsSearchError("Google Maps search input was not found")
             await search_input.fill(query)
