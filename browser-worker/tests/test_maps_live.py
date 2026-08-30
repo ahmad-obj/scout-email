@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from browser_worker.maps import search_maps
+from browser_worker.maps import MapsSearchError, search_maps
 from browser_worker.runtime import BrowserRuntime
 from browser_worker.settings import BrowserWorkerSettings
 
@@ -26,7 +26,20 @@ async def test_live_maps_smoke_returns_at_most_three_normalized_leads(tmp_path):
     runtime = BrowserRuntime(settings)
     await runtime.start()
     try:
-        leads = await search_maps(runtime, "dentist Lahore", max_results=3)
+        try:
+            leads = await search_maps(runtime, "dentist Lahore", max_results=3)
+        except MapsSearchError:
+            async with runtime.page(viewport={"width": 1440, "height": 1000}) as page:
+                await page.goto("https://www.google.com/maps", wait_until="domcontentloaded")
+                print("MAPS_DIAGNOSTIC_URL=", page.url)
+                print("MAPS_DIAGNOSTIC_TITLE=", await page.title())
+                inputs = await page.locator("input").evaluate_all(
+                    "els => els.map(e => ({id:e.id, aria:e.getAttribute('aria-label'), placeholder:e.getAttribute('placeholder'), type:e.type}))"
+                )
+                print("MAPS_DIAGNOSTIC_INPUTS=", inputs)
+                text = (await page.locator("body").inner_text())[:800]
+                print("MAPS_DIAGNOSTIC_TEXT=", text.replace("\n", " | "))
+            raise
     finally:
         await runtime.stop()
     assert 1 <= len(leads) <= 3
