@@ -19,6 +19,7 @@ _WRITER_KEYS = (
     "writing_rules",
     "approved_examples",
     "recent_corrections",
+    "recent_sent_structures",
 )
 
 
