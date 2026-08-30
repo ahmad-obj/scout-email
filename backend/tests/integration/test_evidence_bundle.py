@@ -14,20 +14,24 @@ from scout_email.evidence.service import EvidenceService
 
 
 class FakeBrowserClient:
-    def __init__(self) -> None:
+    def __init__(self, artifact_root: Path) -> None:
+        self.artifact_root = artifact_root
         self.calls: list[tuple[str, str, str | None]] = []
 
     async def render(self, url: str, *, viewport: str = "desktop", screenshot_path: str | None = None):
         self.calls.append((url, viewport, screenshot_path))
         assert screenshot_path is not None
-        path = Path(screenshot_path)
+        relative = Path(screenshot_path)
+        assert not relative.is_absolute()
+        assert ".." not in relative.parts
+        path = self.artifact_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"fake-png")
         return BrowserRenderResponse(
             final_url=url,
             title="Acme Dental",
             html="<html><body><h1>Acme Dental</h1></body></html>",
-            screenshot_path=screenshot_path,
+            screenshot_path=str(path),
         )
 
 
@@ -99,8 +103,9 @@ async def test_build_bundle_persists_verified_facts_and_two_scoped_screenshots(t
         )
         await session.commit()
 
-        browser = FakeBrowserClient()
-        service = EvidenceService(session, data_root=tmp_path / "data", browser_client=browser)
+        data_root = tmp_path / "data"
+        browser = FakeBrowserClient(data_root)
+        service = EvidenceService(session, data_root=data_root, browser_client=browser)
         bundle = await service.build_bundle(
             campaign_id=campaign.id,
             lead_id=lead.id,
@@ -118,12 +123,18 @@ async def test_build_bundle_persists_verified_facts_and_two_scoped_screenshots(t
             "screenshot",
         }
 
-        root = (tmp_path / "data").resolve()
         for shot in bundle.screenshots:
-            path = Path(shot.artifact_path).resolve()
-            assert path.is_relative_to(root)
-            assert f"campaigns/{campaign.id}/leads/{lead.id}/screenshots" in path.as_posix()
-            assert path.exists()
+            relative = Path(shot.artifact_path)
+            assert not relative.is_absolute()
+            assert ".." not in relative.parts
+            assert relative.parts[:5] == (
+                "campaigns",
+                str(campaign.id),
+                "leads",
+                str(lead.id),
+                "screenshots",
+            )
+            assert (data_root / relative).exists()
 
         for item in bundle.evidence:
             assert item.id > 0
