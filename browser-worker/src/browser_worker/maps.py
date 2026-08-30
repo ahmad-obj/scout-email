@@ -184,15 +184,16 @@ async def _first_visible(page, selectors: tuple[str, ...]):
 async def _find_search_input(page, selectors: tuple[str, ...] = SEARCH_INPUT_SELECTORS):
     """Return a confidently identified Maps search input or None.
 
-    Stable selectors win. For headless Maps variants that strip the legacy id and
-    aria-label, accept a bare text/search input only when exactly one such input is
-    visible, avoiding arbitrary selection on ambiguous pages.
+    Stable selectors win. Some headless Maps variants omit the HTML `type`
+    attribute even though the DOM input.type property is the browser default
+    `text`. Inspect that property and accept a generic fallback only when exactly
+    one visible text/search input exists.
     """
     known = await _first_visible(page, selectors)
     if known is not None:
         return known
 
-    collection = page.locator('input[type="text"], input[type="search"]')
+    collection = page.locator("input")
     try:
         count = await collection.count()
     except Exception:
@@ -202,6 +203,9 @@ async def _find_search_input(page, selectors: tuple[str, ...] = SEARCH_INPUT_SEL
     for index in range(count):
         candidate = collection.nth(index)
         try:
+            dom_type = await candidate.evaluate("e => e.type")
+            if dom_type not in {"text", "search"}:
+                continue
             if await candidate.is_visible():
                 visible.append(candidate)
         except Exception:
