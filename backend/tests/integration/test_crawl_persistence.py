@@ -49,6 +49,14 @@ async def test_crawl_result_persists_structured_pages_idempotently(tmp_path):
                     calls_to_action=["Book appointment"],
                     forms=[],
                     links=["https://example.com/services"],
+                    images=[
+                        {
+                            "src": "https://example.com/hero.webp",
+                            "alt": "Clinic reception",
+                            "width": 1600,
+                            "height": 900,
+                        }
+                    ],
                     technical_signals={"has_viewport": True},
                 ),
                 CrawledPage(
@@ -60,6 +68,7 @@ async def test_crawl_result_persists_structured_pages_idempotently(tmp_path):
                     calls_to_action=["Request consultation"],
                     forms=[],
                     links=[],
+                    images=[],
                     technical_signals={"has_viewport": False},
                 ),
             ],
@@ -82,6 +91,14 @@ async def test_crawl_result_persists_structured_pages_idempotently(tmp_path):
         assert homepage.important_text == "Dental care for Lahore families."
         homepage_data = json.loads(homepage.extracted_json)
         assert homepage_data["headings"] == ["Acme Dental"]
+        assert homepage_data["images"] == [
+            {
+                "src": "https://example.com/hero.webp",
+                "alt": "Clinic reception",
+                "width": 1600,
+                "height": 900,
+            }
+        ]
         assert homepage_data["browser_fallback_required"] is False
 
         services = next(row for row in rows if row.url.endswith("/services"))
