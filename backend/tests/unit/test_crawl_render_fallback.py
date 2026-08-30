@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 import pytest
 
 from scout_email.browser.schemas import BrowserRenderResponse
@@ -25,7 +27,7 @@ class FakeBrowser:
 
     async def render(self, url: str, **_kwargs) -> BrowserRenderResponse:
         self.calls.append(url)
-        slug = url.rstrip("/").rsplit("/", 1)[-1] or "home"
+        slug = urlsplit(url).path.strip("/").rsplit("/", 1)[-1] or "home"
         return BrowserRenderResponse(
             final_url=url,
             title=f"Rendered {slug}",
