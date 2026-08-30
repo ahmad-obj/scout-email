@@ -34,6 +34,18 @@ class FakeBrowserClient:
             screenshot_path=str(path),
         )
 
+    async def capture_homepage_screenshots(
+        self,
+        url: str,
+        *,
+        desktop_path: str,
+        mobile_path: str,
+    ):
+        return [
+            await self.render(url, viewport="desktop", screenshot_path=desktop_path),
+            await self.render(url, viewport="mobile", screenshot_path=mobile_path),
+        ]
+
 
 @pytest.mark.asyncio
 async def test_build_bundle_persists_verified_facts_and_two_scoped_screenshots(tmp_path):
