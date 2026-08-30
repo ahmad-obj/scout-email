@@ -5,6 +5,8 @@ from urllib.parse import urldefrag, urljoin
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
+from scout_email.crawl.audit import audit_page
+
 
 class PageExtraction(BaseModel):
     url: str
@@ -46,7 +48,13 @@ def _dimension(value: object) -> int | None:
     return number if number > 0 else None
 
 
-def extract_page(html: str, url: str, *, text_limit: int = 12_000) -> PageExtraction:
+def extract_page(
+    html: str,
+    url: str,
+    *,
+    text_limit: int = 12_000,
+    http_status: int | None = None,
+) -> PageExtraction:
     soup = BeautifulSoup(html or "", "lxml")
 
     title = _text(soup.title.get_text(" ", strip=True)) if soup.title else None
@@ -109,17 +117,11 @@ def extract_page(html: str, url: str, *, text_limit: int = 12_000) -> PageExtrac
             }
         )
 
-    meta_description = soup.find("meta", attrs={"name": lambda value: isinstance(value, str) and value.casefold() == "description"})
-    viewport = soup.find("meta", attrs={"name": lambda value: isinstance(value, str) and value.casefold() == "viewport"})
-    canonical = soup.find("link", rel=lambda value: value and "canonical" in value)
-    open_graph = soup.find("meta", attrs={"property": lambda value: isinstance(value, str) and value.casefold().startswith("og:")})
-
-    technical_signals: dict[str, object] = {
-        "has_viewport": viewport is not None,
-        "meta_description": _text(meta_description.get("content")) if meta_description else None,
-        "canonical": urljoin(url, canonical.get("href")) if canonical and canonical.get("href") else None,
-        "has_open_graph": open_graph is not None,
-    }
+    technical_signals = audit_page(
+        html,
+        url,
+        http_status=http_status,
+    ).model_dump(mode="json")
 
     reduced = BeautifulSoup(html or "", "lxml")
     for tag in reduced.select("script, style, noscript, template, nav, footer, header, aside"):
