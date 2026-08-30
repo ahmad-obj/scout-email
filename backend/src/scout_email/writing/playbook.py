@@ -44,6 +44,19 @@ def _read_required(root: Path, name: str) -> bytes:
     return path.read_bytes()
 
 
+def _parse_banned_phrases(raw: str) -> tuple[str, ...]:
+    phrases: list[str] = []
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if text.startswith("-"):
+            text = text[1:].strip()
+        if text:
+            phrases.append(text.strip("`\"'"))
+    return tuple(phrases)
+
+
 def load_playbook(root: Path | str) -> WritingPlaybook:
     root_path = Path(root)
     sources = {name: _read_required(root_path, name) for name in _REQUIRED_FILES}
@@ -58,10 +71,8 @@ def load_playbook(root: Path | str) -> WritingPlaybook:
     company_context = sources["company_context.md"].decode("utf-8").strip()
     writing_rules = sources["writing_rules.md"].decode("utf-8").strip()
     cta_rules = sources["cta_rules.md"].decode("utf-8").strip()
-    banned_phrases = tuple(
-        line.strip()
-        for line in sources["banned_phrases.md"].decode("utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+    banned_phrases = _parse_banned_phrases(
+        sources["banned_phrases.md"].decode("utf-8")
     )
 
     approved = json.loads(sources["approved_examples.json"])
