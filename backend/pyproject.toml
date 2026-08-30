@@ -11,6 +11,7 @@ dependencies = [
   "sqlalchemy>=2.0",
   "aiosqlite>=0.22",
   "alembic>=1.14",
+  "rapidfuzz>=3.14",
 ]
 
 [dependency-groups]
