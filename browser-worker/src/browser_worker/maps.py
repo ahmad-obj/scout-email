@@ -17,9 +17,13 @@ _REVIEWS_TEXT_RE = re.compile(r"(?P<count>[\d,]+)\s*reviews?", re.I)
 _EXTERNAL_ID_RE = re.compile(r"(?:^|!)1s(?P<id>0x[0-9a-f]+:0x[0-9a-f]+)", re.I)
 
 # Playwright selectors are centralized here so Maps DOM drift is isolated.
+# The generic text input is intentionally last: some headless Maps variants
+# render the search box without the legacy id/aria-label, but expose exactly
+# one visible text input in the Maps shell.
 SEARCH_INPUT_SELECTORS = (
     "#searchboxinput",
     'input[aria-label*="Search Google Maps"]',
+    'input[type="text"]',
 )
 RESULT_FEED_SELECTORS = (
     'div[role="feed"]',
