@@ -1,0 +1,32 @@
+[project]
+name = "scout-email-browser-worker"
+version = "0.1.0"
+description = "Isolated Playwright/Chromium worker for Scout Email"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.34",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.7",
+  "playwright>=1.50",
+  "beautifulsoup4>=4.13",
+  "lxml>=5.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.25",
+  "httpx>=0.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/browser_worker"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
