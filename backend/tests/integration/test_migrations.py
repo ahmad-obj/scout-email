@@ -39,6 +39,7 @@ EXPECTED_TABLES = {
     "approved_examples",
     "rejected_patterns",
     "prompt_versions",
+    "llm_generations",
     "campaign_metrics",
 }
 
@@ -95,4 +96,21 @@ def test_migration_creates_job_runtime_lease_metadata(tmp_path):
         "lease_expires_at",
         "last_error_code",
         "last_error_message",
+    } <= columns
+
+
+def test_migration_creates_llm_generation_metadata_columns(tmp_path):
+    db_path = _upgrade(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info('llm_generations')")
+        }
+    assert {
+        "task",
+        "provider",
+        "model",
+        "prompt_version",
+        "status",
+        "repair_attempted",
+        "generated_at",
     } <= columns
