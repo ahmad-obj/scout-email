@@ -1,0 +1,40 @@
+{
+  "business": {
+    "name": "Acme Dental",
+    "summary": "A Lahore dental clinic focused on family and cosmetic care.",
+    "category": "Dentist",
+    "location": "Lahore"
+  },
+  "business_model": {
+    "target_customers": ["local patients"],
+    "offerings": ["family dentistry", "cosmetic dentistry"],
+    "primary_conversion": "book appointment"
+  },
+  "presence": {
+    "website_state": "LIVE",
+    "social_profiles": []
+  },
+  "strengths": [
+    {
+      "text": "The website clearly presents the clinic's dental services.",
+      "evidence_ids": [2]
+    }
+  ],
+  "website_findings": [
+    {
+      "text": "The mobile homepage booking call-to-action is not prominent.",
+      "evidence_ids": [3]
+    }
+  ],
+  "technical_findings": [
+    {
+      "text": "The verified website is served over HTTPS.",
+      "evidence_ids": [1]
+    }
+  ],
+  "contact": {
+    "contact_id": 1
+  },
+  "confidence": 0.9,
+  "outcome": "COMPLETE"
+}
