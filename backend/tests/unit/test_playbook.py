@@ -53,3 +53,18 @@ def test_playbook_fails_if_a_required_source_file_is_missing(tmp_path):
         assert "cta_rules.md" in str(exc)
     else:
         raise AssertionError("missing required playbook file must fail closed")
+
+
+def test_markdown_banned_phrase_bullets_are_normalized_for_exact_scanning(tmp_path):
+    root = tmp_path / "weberaise"
+    _seed(root)
+    (root / "banned_phrases.md").write_text(
+        "# Banned\n\n- I hope this email finds you well\n- elevate your online presence\n"
+    )
+
+    playbook = load_playbook(root)
+
+    assert playbook.banned_phrases == (
+        "I hope this email finds you well",
+        "elevate your online presence",
+    )
