@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
-from scout_email.browser.schemas import BrowserMapLead
+from scout_email.browser.schemas import BrowserMapLead, BrowserRenderResponse
 
 
 class BrowserWorkerError(RuntimeError):
@@ -66,3 +67,52 @@ class BrowserWorkerClient:
             except httpx.HTTPStatusError as error:
                 raise BrowserWorkerResponseError(f"browser worker rejected request with {error.response.status_code}") from error
         raise BrowserWorkerUnavailable("browser worker unavailable after bounded retries") from last_error
+
+    async def render(
+        self,
+        url: str,
+        *,
+        viewport: Literal["desktop", "mobile"] = "desktop",
+        screenshot_path: str | None = None,
+    ) -> BrowserRenderResponse:
+        last_error: Exception | None = None
+        payload = {
+            "url": url,
+            "viewport": viewport,
+            "screenshot_path": screenshot_path,
+        }
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = await self._get_client().post(
+                    f"{self.base_url}/render",
+                    json=payload,
+                )
+                if response.status_code in {502, 503, 504}:
+                    raise BrowserWorkerUnavailable(
+                        f"browser worker returned {response.status_code}"
+                    )
+                response.raise_for_status()
+                try:
+                    return BrowserRenderResponse.model_validate(response.json())
+                except (ValidationError, ValueError) as error:
+                    raise BrowserWorkerResponseError(
+                        "malformed browser worker response"
+                    ) from error
+            except BrowserWorkerResponseError:
+                raise
+            except (
+                httpx.TransportError,
+                httpx.TimeoutException,
+                BrowserWorkerUnavailable,
+            ) as error:
+                last_error = error
+                if attempt >= self.max_attempts:
+                    break
+                await asyncio.sleep(0.15 * attempt)
+            except httpx.HTTPStatusError as error:
+                raise BrowserWorkerResponseError(
+                    f"browser worker rejected request with {error.response.status_code}"
+                ) from error
+        raise BrowserWorkerUnavailable(
+            "browser worker unavailable after bounded retries"
+        ) from last_error
