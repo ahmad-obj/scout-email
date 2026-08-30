@@ -16,6 +16,7 @@ def test_extract_page_reduces_boilerplate_and_keeps_conversion_signals():
         <main>
           <h1>Dental implants in Lahore</h1>
           <p>Replace missing teeth with a fixed implant treatment plan.</p>
+          <img src="/images/implant.webp" alt="Dental implant model" width="1200" height="800">
           <h2>Book a consultation</h2>
           <a href="/contact">Book appointment</a>
           <a href="https://instagram.com/acme">Instagram</a>
@@ -47,6 +48,14 @@ def test_extract_page_reduces_boilerplate_and_keeps_conversion_signals():
     ]
     assert "https://example.com/contact" in result.links
     assert "https://instagram.com/acme" in result.links
+    assert result.images == [
+        {
+            "src": "https://example.com/images/implant.webp",
+            "alt": "Dental implant model",
+            "width": 1200,
+            "height": 800,
+        }
+    ]
     assert result.technical_signals["has_viewport"] is True
     assert result.technical_signals["meta_description"] == "Implants and cosmetic dentistry in Lahore"
     assert result.technical_signals["canonical"] == "https://example.com/implants"
