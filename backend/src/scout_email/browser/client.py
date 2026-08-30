@@ -116,3 +116,23 @@ class BrowserWorkerClient:
         raise BrowserWorkerUnavailable(
             "browser worker unavailable after bounded retries"
         ) from last_error
+
+    async def capture_homepage_screenshots(
+        self,
+        url: str,
+        *,
+        desktop_path: str,
+        mobile_path: str,
+    ) -> list[BrowserRenderResponse]:
+        """Capture the required evidence viewports in deterministic order."""
+        desktop = await self.render(
+            url,
+            viewport="desktop",
+            screenshot_path=desktop_path,
+        )
+        mobile = await self.render(
+            url,
+            viewport="mobile",
+            screenshot_path=mobile_path,
+        )
+        return [desktop, mobile]
