@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import urldefrag, urljoin
 
 from bs4 import BeautifulSoup
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PageExtraction(BaseModel):
@@ -14,6 +14,7 @@ class PageExtraction(BaseModel):
     calls_to_action: list[str]
     forms: list[dict[str, object]]
     links: list[str]
+    images: list[dict[str, object]] = Field(default_factory=list)
     technical_signals: dict[str, object]
 
 
@@ -33,6 +34,16 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _dimension(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value.isdigit():
+        return None
+    number = int(value)
+    return number if number > 0 else None
 
 
 def extract_page(html: str, url: str, *, text_limit: int = 12_000) -> PageExtraction:
@@ -79,6 +90,25 @@ def extract_page(html: str, url: str, *, text_limit: int = 12_000) -> PageExtrac
         absolute, _fragment = urldefrag(urljoin(url, href))
         links.append(absolute)
 
+    images: list[dict[str, object]] = []
+    seen_images: set[str] = set()
+    for image in soup.find_all("img", src=True):
+        raw_src = image.get("src")
+        if not isinstance(raw_src, str) or not raw_src.strip():
+            continue
+        src = urljoin(url, raw_src.strip())
+        if src in seen_images:
+            continue
+        seen_images.add(src)
+        images.append(
+            {
+                "src": src,
+                "alt": _text(image.get("alt")) if isinstance(image.get("alt"), str) else None,
+                "width": _dimension(image.get("width")),
+                "height": _dimension(image.get("height")),
+            }
+        )
+
     meta_description = soup.find("meta", attrs={"name": lambda value: isinstance(value, str) and value.casefold() == "description"})
     viewport = soup.find("meta", attrs={"name": lambda value: isinstance(value, str) and value.casefold() == "viewport"})
     canonical = soup.find("link", rel=lambda value: value and "canonical" in value)
@@ -106,5 +136,6 @@ def extract_page(html: str, url: str, *, text_limit: int = 12_000) -> PageExtrac
         calls_to_action=_dedupe(calls_to_action),
         forms=forms,
         links=_dedupe(links),
+        images=images,
         technical_signals=technical_signals,
     )
