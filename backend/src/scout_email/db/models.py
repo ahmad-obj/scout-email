@@ -99,6 +99,7 @@ class SocialProfile(Base):
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
     network: Mapped[str] = mapped_column(String(80), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     __table_args__ = (UniqueConstraint("lead_id", "network", "url", name="uq_social_profile"),)
 
