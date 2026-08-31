@@ -51,7 +51,12 @@ class WriterService:
         self.gateway = gateway
         self.playbook = playbook
 
-    async def write(self, *, lead_id: int) -> EmailDraftOutput:
+    async def write(
+        self,
+        *,
+        lead_id: int,
+        critic_feedback: list[str] | None = None,
+    ) -> EmailDraftOutput:
         lead = await self.session.get(Lead, lead_id)
         if lead is None:
             raise ValueError("lead not found")
@@ -148,6 +153,7 @@ class WriterService:
                     for row in corrections
                 ],
                 "recent_sent_structures": recent_bodies,
+                "critic_feedback": critic_feedback or [],
             }
         )
 
