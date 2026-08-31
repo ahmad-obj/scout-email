@@ -46,17 +46,24 @@ jobs:
         run: pytest -q
 
   lockfile-bootstrap:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Resolve backend lockfile
-        run: uv lock --project backend
-      - uses: actions/upload-artifact@v4
         with:
-          name: backend-uv-lock
-          path: backend/uv.lock
-          if-no-files-found: error
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Resolve and persist backend lockfile once
+        run: |
+          uv lock --project backend
+          if ! git diff --quiet -- backend/uv.lock; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add backend/uv.lock
+            git commit -m "chore: lock backend dependencies"
+            git push origin HEAD:feat/v1-foundation
+          fi
 
   live-maps-smoke:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-maps]')
