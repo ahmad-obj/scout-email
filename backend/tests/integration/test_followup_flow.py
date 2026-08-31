@@ -141,6 +141,7 @@ async def _seed(session, *, sent_at: datetime):
     )
     evidence = Evidence(
         lead_id=lead.id,
+        kind="ux_observation",
         source_type="mobile_screenshot",
         source_url="https://acme.example/",
         artifact_path="campaigns/1/leads/1/mobile-home.png",
@@ -166,7 +167,6 @@ async def _seed(session, *, sent_at: datetime):
         lead_id=lead.id,
         decision="CONTACT",
         primary_angle="mobile booking friction",
-        score=0.9,
         persuasion_brief_json=json.dumps(
             {
                 "primary_angle": "mobile booking friction",
@@ -174,19 +174,29 @@ async def _seed(session, *, sent_at: datetime):
                 "business_implication": "Interested visitors may face extra friction.",
             }
         ),
+        score_components_json=json.dumps(
+            {
+                "severity": 0.8,
+                "evidence_confidence": 0.96,
+                "business_impact": 0.8,
+                "weberaise_fit": 0.9,
+                "explainability": 0.9,
+                "generic_speculation_risk": 0.1,
+            }
+        ),
+        confidence=0.9,
     )
+    session.add(strategy)
+    await session.flush()
     original_draft = EmailDraft(
         lead_id=lead.id,
-        strategy_id=strategy.id if strategy.id else None,
+        strategy_id=strategy.id,
         subject="Quick website thought",
         body="I noticed the booking path could be clearer on mobile.",
         writer_prompt_version="writer:v1",
         model_id="fake",
         approval_state=ApprovalState.APPROVED.value,
     )
-    session.add(strategy)
-    await session.flush()
-    original_draft.strategy_id = strategy.id
     session.add(original_draft)
     await session.flush()
     outbound = OutboundMessage(
