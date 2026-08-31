@@ -1,6 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+
+def normalize_email_identity(value: str | None) -> str:
+    return (value or "").strip().casefold()
+
+
+def normalize_domain_identity(value: str | None) -> str:
+    raw = (value or "").strip().casefold()
+    if not raw:
+        return ""
+
+    parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+    host = (parsed.hostname or "").strip().rstrip(".").casefold()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def normalize_business_identity(value: str | None) -> str:
+    return " ".join((value or "").strip().casefold().split())
 
 
 @dataclass(frozen=True, slots=True)

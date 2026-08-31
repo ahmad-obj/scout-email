@@ -2,13 +2,34 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from scout_email.common.enums import FollowupState, JobState, ReplyClass
+from scout_email.common.enums import (
+    ContactState,
+    FollowupState,
+    JobState,
+    LeadState,
+    ReplyClass,
+)
 from scout_email.common.errors import NotFoundError
-from scout_email.db.models import EmailThread, Followup, Job, Reply
+from scout_email.db.models import (
+    Bounce,
+    Contact,
+    DoNotContact,
+    EmailThread,
+    Followup,
+    Job,
+    Lead,
+    OutboundMessage,
+    Reply,
+)
+from scout_email.messaging.eligibility import (
+    normalize_business_identity,
+    normalize_domain_identity,
+    normalize_email_identity,
+)
 from scout_email.replies.classifier import ReplyClassifier, preclassify_reply
 from scout_email.replies.models import ReplyIntelligenceRecord
 from scout_email.replies.schemas import ReplyIntelligence, ReplySyncRequest, ReplyView
@@ -78,6 +99,11 @@ class ReplyService:
         )
         self.session.add(record)
 
+        if intelligence.classification == ReplyClass.UNSUBSCRIBE:
+            await self._apply_unsubscribe(thread=thread, request=request)
+        elif intelligence.classification == ReplyClass.BOUNCE:
+            await self._apply_hard_bounce(thread=thread, request=request)
+
         if intelligence.classification != ReplyClass.AUTO_REPLY:
             await self._cancel_followup_work(
                 thread=thread,
@@ -118,6 +144,101 @@ class ReplyService:
             ),
             received_at=reply.received_at,
         )
+
+    async def _apply_unsubscribe(
+        self,
+        *,
+        thread: EmailThread,
+        request: ReplySyncRequest,
+    ) -> None:
+        lead = await self.session.get(Lead, thread.lead_id)
+        if lead is None:
+            raise NotFoundError(f"Lead {thread.lead_id} not found")
+
+        email = normalize_email_identity(request.from_email)
+        email_domain = (
+            normalize_domain_identity(email.rsplit("@", 1)[-1]) if "@" in email else ""
+        )
+        domain = normalize_domain_identity(lead.canonical_domain) or email_domain
+        business = normalize_business_identity(lead.normalized_name or lead.name)
+
+        rows = (await self.session.execute(select(DoNotContact))).scalars().all()
+        already_suppressed = any(
+            (email and normalize_email_identity(row.email) == email)
+            or (domain and normalize_domain_identity(row.domain) == domain)
+            or (
+                business
+                and normalize_business_identity(row.business_name) == business
+            )
+            for row in rows
+        )
+        if not already_suppressed:
+            self.session.add(
+                DoNotContact(
+                    email=email or None,
+                    domain=domain or None,
+                    business_name=business or None,
+                    reason="recipient_unsubscribe",
+                    source="reply",
+                )
+            )
+
+    async def _apply_hard_bounce(
+        self,
+        *,
+        thread: EmailThread,
+        request: ReplySyncRequest,
+    ) -> None:
+        message = (
+            await self.session.execute(
+                select(OutboundMessage)
+                .where(OutboundMessage.gmail_thread_id == thread.gmail_thread_id)
+                .order_by(OutboundMessage.sent_at.desc(), OutboundMessage.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if message is None:
+            return
+
+        target_email = normalize_email_identity(message.recipient_email)
+        contacts = (
+            await self.session.execute(
+                select(Contact).where(Contact.lead_id == thread.lead_id)
+            )
+        ).scalars().all()
+        bounced_contact = next(
+            (
+                contact
+                for contact in contacts
+                if normalize_email_identity(contact.normalized_email or contact.email)
+                == target_email
+            ),
+            None,
+        )
+        if bounced_contact is not None:
+            bounced_contact.state = ContactState.INVALID.value
+
+        existing_bounce = await self.session.scalar(
+            select(Bounce).where(
+                Bounce.outbound_message_id == message.id,
+                func.lower(Bounce.email) == target_email,
+            )
+        )
+        if existing_bounce is None:
+            self.session.add(
+                Bounce(
+                    outbound_message_id=message.id,
+                    email=target_email,
+                    bounce_type="HARD",
+                    diagnostic=request.body[:4000] or None,
+                )
+            )
+
+        lead = await self.session.get(Lead, thread.lead_id)
+        if lead is None:
+            raise NotFoundError(f"Lead {thread.lead_id} not found")
+        if not any(contact.state == ContactState.VERIFIED.value for contact in contacts):
+            lead.state = LeadState.NO_CONTACT.value
 
     async def _cancel_followup_work(
         self,

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.approval.service import content_hash
@@ -27,6 +27,9 @@ from scout_email.messaging.eligibility import (
     EligibilityResult,
     EligibilitySnapshot,
     evaluate_send_eligibility,
+    normalize_business_identity,
+    normalize_domain_identity,
+    normalize_email_identity,
 )
 from scout_email.messaging.schemas import MessageView, ProviderCompletionRequest
 
@@ -136,20 +139,33 @@ class MessagingService:
         if sender is None:
             raise NotFoundError(f"Sender {sender_id} not found")
 
-        normalized_email = contact.normalized_email.casefold()
-        email_domain = normalized_email.rsplit("@", 1)[-1] if "@" in normalized_email else ""
-        canonical_domain = (lead.canonical_domain or "").strip().casefold()
+        normalized_email = normalize_email_identity(contact.normalized_email)
+        email_domain = (
+            normalize_domain_identity(normalized_email.rsplit("@", 1)[-1])
+            if "@" in normalized_email
+            else ""
+        )
+        canonical_domain = normalize_domain_identity(lead.canonical_domain)
         domains = {item for item in (email_domain, canonical_domain) if item}
-        dnc_conditions = [func.lower(DoNotContact.email) == normalized_email]
-        dnc_conditions.extend(func.lower(DoNotContact.domain) == domain for domain in domains)
-        if lead.normalized_name:
-            dnc_conditions.append(
-                func.lower(DoNotContact.business_name) == lead.normalized_name.casefold()
+        business_identity = normalize_business_identity(
+            lead.normalized_name or lead.name
+        )
+
+        dnc_rows = (await self.session.execute(select(DoNotContact))).scalars().all()
+        dnc_match = any(
+            (
+                bool(row.email)
+                and normalize_email_identity(row.email) == normalized_email
             )
-        dnc_match = bool(
-            await self.session.scalar(
-                select(func.count()).select_from(DoNotContact).where(or_(*dnc_conditions))
+            or (
+                bool(row.domain)
+                and normalize_domain_identity(row.domain) in domains
             )
+            or (
+                bool(row.business_name)
+                and normalize_business_identity(row.business_name) == business_identity
+            )
+            for row in dnc_rows
         )
 
         duplicate_query = select(func.count()).select_from(OutboundMessage).where(
