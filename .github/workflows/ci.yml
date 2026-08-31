@@ -83,6 +83,22 @@ jobs:
         if: always()
         run: docker compose down
 
+  release-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - name: Prepare browser verification environment
+        run: |
+          uv sync --project browser-worker
+          cd browser-worker
+          uv run playwright install --with-deps chromium
+      - name: Run complete default V1 verification
+        run: bash scripts/verify_v1.sh
+
   live-maps-smoke:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-maps]')
     runs-on: ubuntu-latest
