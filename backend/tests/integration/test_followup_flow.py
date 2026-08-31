@@ -47,8 +47,8 @@ class FakeFollowupGateway:
 
     async def generate(self, *, task, context, response_model, prompt_version):
         self.calls.append((task, context))
-        evidence_id = self.evidence_id or int(context["allowed_evidence"][0]["id"])
         if task == "followup_writer":
+            evidence_id = self.evidence_id or int(context["allowed_evidence"][0]["id"])
             output = response_model.model_validate(
                 {
                     "strategy": "ADD_CONCRETE_IDEA",
