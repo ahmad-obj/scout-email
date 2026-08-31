@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import UTC, datetime
+from typing import Any
 
+import httpx
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.approval.service import content_hash
-from scout_email.common.enums import ApprovalState, MessageState
+from scout_email.common.enums import MessageState
 from scout_email.common.errors import NotFoundError, ScoutEmailError
 from scout_email.db.models import (
     Campaign,
@@ -26,10 +28,14 @@ from scout_email.messaging.eligibility import (
     EligibilitySnapshot,
     evaluate_send_eligibility,
 )
-from scout_email.messaging.schemas import MessageView
+from scout_email.messaging.schemas import MessageView, ProviderCompletionRequest
 
 
 class MessagingError(ScoutEmailError):
+    pass
+
+
+class MessagingConfigurationError(MessagingError):
     pass
 
 
@@ -67,13 +73,44 @@ def _idempotency_key(
 
 
 class MessagingService:
-    """Queue and dispatch immutable approved copy; Task 19 supports mock only."""
+    """Fail-closed message dispatcher with mock and guarded n8n Gmail transports."""
 
-    def __init__(self, session: AsyncSession, *, send_mode: str | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        send_mode: str | None = None,
+        n8n_webhook_url: str | None = None,
+        n8n_secret: str | None = None,
+        http_client: Any | None = None,
+    ) -> None:
         self.session = session
         self.send_mode = (
             send_mode or os.getenv("SCOUT_EMAIL_SEND_MODE", "mock")
         ).strip().casefold()
+        self.n8n_webhook_url = (
+            n8n_webhook_url
+            if n8n_webhook_url is not None
+            else os.getenv("SCOUT_EMAIL_N8N_SEND_WEBHOOK_URL")
+        )
+        self.n8n_secret = (
+            n8n_secret
+            if n8n_secret is not None
+            else os.getenv("SCOUT_EMAIL_N8N_WEBHOOK_SECRET")
+        )
+        self.http_client = http_client
+
+    def _assert_transport_configuration(self) -> None:
+        if self.send_mode not in {"mock", "gmail"}:
+            raise MessagingConfigurationError(
+                f"unsupported send mode: {self.send_mode or '<empty>'}"
+            )
+        if self.send_mode == "gmail" and (
+            not self.n8n_webhook_url or not self.n8n_secret
+        ):
+            raise MessagingConfigurationError(
+                "gmail mode requires n8n send webhook URL and shared secret"
+            )
 
     async def evaluate_send_eligibility(
         self,
@@ -162,20 +199,21 @@ class MessagingService:
             and draft.approved_content_hash == content_hash(draft.subject, draft.body)
             and draft.approved_at is not None
         )
-        snapshot = EligibilitySnapshot(
-            approval_state=draft.approval_state,
-            approval_hash_matches=approved_hash_matches,
-            contact_verified=contact.state == "VERIFIED",
-            dnc_match=dnc_match,
-            duplicate_outreach=duplicate_outreach,
-            human_reply_exists=human_reply_exists,
-            campaign_active=campaign.status == "ACTIVE",
-            daily_sent_count=daily_sent_count,
-            max_per_day=campaign.max_per_day,
-            sender_enabled=sender.enabled,
-            sender_healthy=sender.health_state == "HEALTHY",
+        return evaluate_send_eligibility(
+            EligibilitySnapshot(
+                approval_state=draft.approval_state,
+                approval_hash_matches=approved_hash_matches,
+                contact_verified=contact.state == "VERIFIED",
+                dnc_match=dnc_match,
+                duplicate_outreach=duplicate_outreach,
+                human_reply_exists=human_reply_exists,
+                campaign_active=campaign.status == "ACTIVE",
+                daily_sent_count=daily_sent_count,
+                max_per_day=campaign.max_per_day,
+                sender_enabled=sender.enabled,
+                sender_healthy=sender.health_state == "HEALTHY",
+            )
         )
-        return evaluate_send_eligibility(snapshot)
 
     async def queue_and_dispatch(
         self,
@@ -184,6 +222,7 @@ class MessagingService:
         recipient_id: int,
         sender_id: int,
     ) -> MessageView:
+        self._assert_transport_configuration()
         draft = await self.session.get(EmailDraft, draft_id)
         if draft is None:
             raise NotFoundError(f"Draft {draft_id} not found")
@@ -193,6 +232,10 @@ class MessagingService:
         contact = await self.session.get(Contact, recipient_id)
         if contact is None or contact.lead_id != lead.id:
             raise NotFoundError("recipient contact not found for lead")
+        sender = await self.session.get(Sender, sender_id)
+        if sender is None:
+            raise NotFoundError(f"Sender {sender_id} not found")
+
         if not draft.approved_content_hash:
             eligibility = await self.evaluate_send_eligibility(
                 draft_id=draft_id, recipient_id=recipient_id, sender_id=sender_id
@@ -211,6 +254,7 @@ class MessagingService:
         if existing is not None:
             return _message_view(existing)
 
+        # This is the last state read before immutable message creation/provider handoff.
         eligibility = await self.evaluate_send_eligibility(
             draft_id=draft_id,
             recipient_id=recipient_id,
@@ -219,12 +263,13 @@ class MessagingService:
         )
         if not eligibility.allowed:
             raise MessagingEligibilityError(eligibility.reasons)
-        if self.send_mode != "mock":
-            raise MessagingError(
-                "Task 19 dispatch is mock-only; Gmail handoff is not enabled"
-            )
 
         now = datetime.now(UTC)
+        initial_state = (
+            MessageState.QUEUED.value
+            if self.send_mode == "mock"
+            else MessageState.SENDING.value
+        )
         message = OutboundMessage(
             campaign_id=lead.campaign_id,
             lead_id=lead.id,
@@ -233,28 +278,123 @@ class MessagingService:
             recipient_email=contact.normalized_email,
             subject=draft.subject,
             body=draft.body,
-            state=MessageState.QUEUED.value,
+            state=initial_state,
             idempotency_key=key,
             queued_at=now,
         )
         self.session.add(message)
         await self.session.flush()
 
-        # Mock mode represents the provider handoff without making any external call.
-        mock_message_id = f"mock-message-{message.id}"
-        mock_thread_id = f"mock-thread-{message.id}"
-        message.state = MessageState.SENT.value
-        message.gmail_message_id = mock_message_id
-        message.gmail_thread_id = mock_thread_id
-        message.sent_at = now
-        self.session.add(
-            EmailThread(
-                lead_id=lead.id,
-                campaign_id=lead.campaign_id,
-                gmail_thread_id=mock_thread_id,
-                followup_stage=0,
-                followup_cancelled=False,
+        if self.send_mode == "mock":
+            mock_message_id = f"mock-message-{message.id}"
+            mock_thread_id = f"mock-thread-{message.id}"
+            message.state = MessageState.SENT.value
+            message.gmail_message_id = mock_message_id
+            message.gmail_thread_id = mock_thread_id
+            message.sent_at = now
+            self.session.add(
+                EmailThread(
+                    lead_id=lead.id,
+                    campaign_id=lead.campaign_id,
+                    gmail_thread_id=mock_thread_id,
+                    followup_stage=0,
+                    followup_cancelled=False,
+                )
+            )
+            await self.session.commit()
+            return _message_view(message)
+
+        # Commit first so an immediate n8n callback can resolve the backend message ID.
+        await self.session.commit()
+        payload = {
+            "message_id": message.id,
+            "recipient": message.recipient_email,
+            "sender": sender.email,
+            "subject": message.subject,
+            "body": message.body,
+        }
+        headers = {"X-Scout-Email-Secret": self.n8n_secret or ""}
+        try:
+            response = await self._post_n8n(payload=payload, headers=headers)
+        except Exception as error:
+            message.state = MessageState.FAILED.value
+            await self.session.commit()
+            raise MessagingError("n8n Gmail handoff failed") from error
+        if response.status_code >= 400:
+            message.state = MessageState.FAILED.value
+            await self.session.commit()
+            raise MessagingError(
+                f"n8n Gmail handoff returned HTTP {response.status_code}"
+            )
+        return _message_view(message)
+
+    async def _post_n8n(self, *, payload: dict[str, Any], headers: dict[str, str]):
+        assert self.n8n_webhook_url is not None
+        if self.http_client is not None:
+            return await self.http_client.post(
+                self.n8n_webhook_url,
+                json=payload,
+                headers=headers,
+                timeout=20.0,
+            )
+        async with httpx.AsyncClient() as client:
+            return await client.post(
+                self.n8n_webhook_url,
+                json=payload,
+                headers=headers,
+                timeout=20.0,
+            )
+
+    async def complete_provider_result(
+        self,
+        *,
+        message_id: int,
+        completion: ProviderCompletionRequest,
+    ) -> MessageView:
+        message = await self.session.get(OutboundMessage, message_id)
+        if message is None:
+            raise NotFoundError(f"Message {message_id} not found")
+
+        if completion.status == "FAILED":
+            if message.state != MessageState.SENT.value:
+                message.state = MessageState.FAILED.value
+                await self.session.commit()
+            return _message_view(message)
+
+        assert completion.provider_message_id is not None
+        assert completion.provider_thread_id is not None
+        if message.state == MessageState.SENT.value:
+            if (
+                message.gmail_message_id != completion.provider_message_id
+                or message.gmail_thread_id != completion.provider_thread_id
+            ):
+                raise MessagingError("provider completion conflicts with sent message")
+            return _message_view(message)
+
+        existing_thread = await self.session.scalar(
+            select(EmailThread).where(
+                EmailThread.gmail_thread_id == completion.provider_thread_id
             )
         )
+        if existing_thread is not None and (
+            existing_thread.lead_id != message.lead_id
+            or existing_thread.campaign_id != message.campaign_id
+        ):
+            raise MessagingError("provider thread already belongs to another lead")
+
+        message.state = MessageState.SENT.value
+        message.gmail_message_id = completion.provider_message_id
+        message.gmail_thread_id = completion.provider_thread_id
+        message.sent_at = datetime.now(UTC)
+        if existing_thread is None:
+            self.session.add(
+                EmailThread(
+                    lead_id=message.lead_id,
+                    campaign_id=message.campaign_id,
+                    gmail_thread_id=completion.provider_thread_id,
+                    followup_stage=0,
+                    followup_cancelled=False,
+                )
+            )
         await self.session.commit()
         return _message_view(message)

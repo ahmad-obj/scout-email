@@ -1,0 +1,174 @@
+{
+  "name": "Scout Email - Send Approved",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-approved",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "receive-approved-message",
+      "name": "Receive Approved Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-520, 0],
+      "webhookId": "scout-email-send-approved",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_IN_N8N",
+          "name": "Scout Email Backend Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.body.recipient }}",
+        "subject": "={{ $json.body.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "gmail-send",
+      "name": "Gmail Send",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-260, 0],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_IN_N8N",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/messages/' + $('Receive Approved Message').item.json.body.message_id + '/provider-result' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Scout-Email-Secret",
+              "value": "={{ $env.SCOUT_EMAIL_N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({status: 'SENT', provider_message_id: $json.id, provider_thread_id: $json.threadId}) }}",
+        "options": {}
+      },
+      "id": "callback-success",
+      "name": "Callback Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/messages/' + $('Receive Approved Message').item.json.body.message_id + '/provider-result' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Scout-Email-Secret",
+              "value": "={{ $env.SCOUT_EMAIL_N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({status: 'FAILED', error: $json.error?.message || $json.message || 'Gmail send failed'}) }}",
+        "options": {}
+      },
+      "id": "callback-failure",
+      "name": "Callback Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"accepted\":true}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [280, 0]
+    }
+  ],
+  "connections": {
+    "Receive Approved Message": {
+      "main": [
+        [
+          {
+            "node": "Gmail Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Send": {
+      "main": [
+        [
+          {
+            "node": "Callback Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Callback Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Success": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Failure": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-4000-8000-000000000020",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
