@@ -1,0 +1,97 @@
+{
+  "name": "Scout Email - Reply Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [-520, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_IN_N8N",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst rawHeaders = j.payload?.headers ?? j.headers ?? [];\nconst headers = Array.isArray(rawHeaders)\n  ? Object.fromEntries(rawHeaders.filter(h => h?.name).map(h => [String(h.name), String(h.value ?? '')]))\n  : rawHeaders;\nconst from = j.from?.value?.[0]?.address ?? j.from ?? headers.From ?? headers.from ?? '';\nconst subject = j.subject ?? headers.Subject ?? headers.subject ?? '';\nconst body = j.textPlain ?? j.text ?? j.body?.data ?? j.snippet ?? '';\nreturn [{ json: {\n  gmail_thread_id: String(j.threadId ?? j.thread_id ?? ''),\n  gmail_message_id: String(j.id ?? j.messageId ?? ''),\n  from_email: String(from),\n  subject: String(subject),\n  body: String(body),\n  headers,\n  received_at: new Date(Number(j.internalDate ?? Date.now())).toISOString()\n} }];"
+      },
+      "id": "normalize-message",
+      "name": "Normalize Gmail Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/replies/sync' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Scout-Email-Secret",
+              "value": "={{ $env.SCOUT_EMAIL_N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "sync-reply",
+      "name": "Sync Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [20, 0]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Gmail Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Gmail Message": {
+      "main": [
+        [
+          {
+            "node": "Sync Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-4000-8000-000000000021",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
