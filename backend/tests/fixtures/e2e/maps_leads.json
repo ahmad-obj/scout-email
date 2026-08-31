@@ -1,0 +1,35 @@
+[
+  {
+    "name": "Acme Dental Clinic",
+    "category": "Dentist",
+    "address": "12 Main Boulevard, Lahore",
+    "phone": "+92 42 111 222 333",
+    "website": "https://acme.example/",
+    "rating": 4.6,
+    "review_count": 183,
+    "maps_url": "https://maps.google.com/?cid=fixture-acme",
+    "source_external_id": "fixture-acme"
+  },
+  {
+    "name": "Acme Dental",
+    "category": "Dental clinic",
+    "address": "12 Main Boulevard, Lahore",
+    "phone": "+92 42 111 222 333",
+    "website": "https://acme.example",
+    "rating": 4.6,
+    "review_count": 184,
+    "maps_url": "https://maps.google.com/?cid=fixture-acme",
+    "source_external_id": "fixture-acme"
+  },
+  {
+    "name": "Excellent Dental Studio",
+    "category": "Dentist",
+    "address": "88 Model Town, Lahore",
+    "phone": "+92 42 555 0101",
+    "website": "https://excellent.example/",
+    "rating": 4.9,
+    "review_count": 420,
+    "maps_url": "https://maps.google.com/?cid=fixture-excellent",
+    "source_external_id": "fixture-excellent"
+  }
+]
