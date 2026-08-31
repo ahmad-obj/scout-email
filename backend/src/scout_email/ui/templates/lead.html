@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Scout Email · {{ lead.name if lead else 'Draft' }}</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0b0d10;color:#f4f6f8}
+    body{max-width:1100px;margin:0 auto;padding:32px 24px;background:#0b0d10}a{color:#9ec5ff}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.muted{color:#9aa4b2}.score{font-size:28px;font-weight:750}
+    .grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr);gap:18px;margin-top:22px}.panel{border:1px solid #252a31;border-radius:14px;background:#12151a;padding:18px}.panel h2{font-size:15px;margin:0 0 12px;color:#cbd2da;text-transform:uppercase;letter-spacing:.06em}
+    input,textarea{box-sizing:border-box;width:100%;background:#0c0f13;color:#f4f6f8;border:1px solid #343b45;border-radius:9px;padding:11px;font:inherit}textarea{min-height:260px;resize:vertical}label{display:block;margin:12px 0 6px;color:#aeb7c2;font-size:13px}
+    .actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}button{border:0;border-radius:9px;padding:10px 14px;font-weight:650;cursor:pointer;background:#e9edf2;color:#11151a}.secondary{background:#282e36;color:#f4f6f8}.danger{background:#4b2026;color:#ffd9dd}
+    .item{padding:11px 0;border-top:1px solid #252a31}.item:first-child{border-top:0}.claim{line-height:1.45}.path{font:12px ui-monospace,SFMono-Regular,monospace;color:#93a0af;word-break:break-all;margin-top:5px}.status{min-height:20px;margin-top:10px;color:#b7c1cc}
+    @media(max-width:800px){.grid{grid-template-columns:1fr}.top{display:block}.score{margin-top:12px}}
+  </style>
+</head>
+<body>
+  <a href="/review">← Review queue</a>
+  <div class="top">
+    <div>
+      <h1>{{ lead.name if lead else 'Unknown lead' }}</h1>
+      <div class="muted">{{ lead.category if lead else '' }}{% if lead and lead.city %} · {{ lead.city }}{% endif %}</div>
+      <p><strong>Angle:</strong> {{ strategy.primary_angle if strategy else 'No strategy angle' }}</p>
+    </div>
+    <div><div class="muted">Opportunity score</div><div class="score">{{ score if score is not none else '—' }}</div></div>
+  </div>
+  <div class="grid">
+    <div class="panel">
+      <h2>Email</h2>
+      <label for="subject">Subject</label>
+      <input id="subject" value="{{ draft.subject }}">
+      <label for="body">Body</label>
+      <textarea id="body">{{ draft.body }}</textarea>
+      <div class="actions">
+        <button onclick="approveDraft()">Approve</button>
+        <button class="secondary" onclick="saveEdit()">Save edit</button>
+        <button class="secondary" onclick="regenerateDraft()">Regenerate</button>
+        <button class="danger" onclick="rejectDraft()">Reject</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+    <div>
+      <div class="panel">
+        <h2>Evidence</h2>
+        {% for row in evidence %}
+          <div class="item"><div class="claim">{{ row.claim }}</div>{% if row.source_url %}<div><a href="{{ row.source_url }}" target="_blank" rel="noreferrer">Source</a></div>{% endif %}{% if row.artifact_path %}<div class="path">{{ row.artifact_path }}</div>{% endif %}</div>
+        {% else %}<div class="muted">No evidence.</div>{% endfor %}
+      </div>
+      <div class="panel" style="margin-top:18px">
+        <h2>Screenshots</h2>
+        {% for shot in screenshots %}<div class="item"><strong>{{ shot.viewport }}</strong><div class="path">{{ shot.artifact_path }}</div></div>{% else %}<div class="muted">No screenshots.</div>{% endfor %}
+      </div>
+      <div class="panel" style="margin-top:18px">
+        <h2>Audit findings</h2>
+        {% for finding in findings %}<div class="item">{{ finding.problem }}</div>{% else %}<div class="muted">No findings.</div>{% endfor %}
+      </div>
+    </div>
+  </div>
+<script>
+const draftId={{ draft.id }};
+const statusNode=document.getElementById('status');
+async function post(path,payload){
+  statusNode.textContent='Working…';
+  const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){statusNode.textContent=data.detail||`Request failed (${response.status})`;return null;}
+  statusNode.textContent='Saved.';return data;
+}
+async function saveEdit(){const data=await post(`/approval/drafts/${draftId}/edit`,{subject:document.getElementById('subject').value,body:document.getElementById('body').value,reviewer:'human',edit_context:'manual_review'});if(data)location.reload();}
+async function approveDraft(){const data=await post(`/approval/drafts/${draftId}/approve`,{reviewer:'human'});if(data)location.href='/review';}
+async function regenerateDraft(){const data=await post(`/approval/drafts/${draftId}/regenerate`,{reviewer:'human'});if(data)location.href='/review';}
+async function rejectDraft(){const reason=prompt('Why reject this draft?');if(!reason)return;const data=await post(`/approval/drafts/${draftId}/reject`,{reviewer:'human',reason});if(data)location.href='/review';}
+</script>
+</body>
+</html>
