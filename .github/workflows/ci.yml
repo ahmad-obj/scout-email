@@ -45,25 +45,43 @@ jobs:
         working-directory: browser-worker
         run: pytest -q
 
-  lockfile-bootstrap:
-    permissions:
-      contents: write
+  dependency-lock:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
-      - name: Resolve and persist backend lockfile once
+      - name: Verify backend lockfile
+        run: uv lock --check --project backend
+
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare local runtime directories
         run: |
-          uv lock --project backend
-          if [ -n "$(git status --porcelain -- backend/uv.lock)" ]; then
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add backend/uv.lock
-            git commit -m "chore: lock backend dependencies"
-            git push origin HEAD:feat/v1-foundation
-          fi
+          cp .env.example .env
+          mkdir -p data n8n_data
+          sudo chown -R 1000:1000 data n8n_data
+      - name: Validate compose configuration
+        run: docker compose config >/dev/null
+      - name: Build local service images
+        run: docker compose build outreach-api browser-worker
+      - name: Start local stack
+        run: docker compose up -d
+      - name: Verify API health and stack state
+        run: |
+          docker compose ps
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs outreach-api browser-worker n8n
+          exit 1
+      - name: Stop local stack
+        if: always()
+        run: docker compose down
 
   live-maps-smoke:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-maps]')
