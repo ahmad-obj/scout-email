@@ -8,6 +8,7 @@ from scout_email.browser.client import BrowserWorkerClient
 from scout_email.campaigns.service import CampaignService
 from scout_email.common.errors import InvalidStateTransitionError
 from scout_email.db.models import CampaignSearch, Lead
+from scout_email.jobs.schemas import JobReference
 from scout_email.jobs.service import JobService
 from scout_email.leads.service import LeadIngestService
 from scout_email.scout.maps import browser_lead_to_inputs, source_identity
@@ -34,17 +35,25 @@ class ScoutService:
             raise InvalidStateTransitionError(str(error)) from error
         target = campaign.target_leads or 1
         if current >= target:
-            return ScoutEnqueueResponse(campaign_id=campaign_id, job_ids=[])
+            return ScoutEnqueueResponse(campaign_id=campaign_id, jobs=[], job_ids=[])
         searches = (await self.session.execute(select(CampaignSearch).where(CampaignSearch.campaign_id == campaign_id).order_by(CampaignSearch.id))).scalars().all()
         job_service = JobService(self.session)
+        jobs: list[JobReference] = []
         job_ids: list[int] = []
         remaining = max(1, min(100, target - current))
         for row in searches:
             query = f"{row.search_term} in {row.location}"
             payload = ScoutSearchJobPayload(campaign_id=campaign_id, campaign_search_id=row.id, query=query, search_term=row.search_term, location=row.location, max_results=remaining)
             job = await job_service.enqueue_job(SCOUT_JOB_KIND, payload.model_dump(mode="json"), f"scout:{campaign_id}:{row.id}")
+            jobs.append(
+                JobReference(
+                    job_id=job.job_id,
+                    status_url=job.status_url,
+                    correlation_id=job.correlation_id,
+                )
+            )
             job_ids.append(job.id)
-        return ScoutEnqueueResponse(campaign_id=campaign_id, job_ids=job_ids)
+        return ScoutEnqueueResponse(campaign_id=campaign_id, jobs=jobs, job_ids=job_ids)
 
     async def run_search(self, payload: ScoutSearchJobPayload) -> dict[str, int | str]:
         try:

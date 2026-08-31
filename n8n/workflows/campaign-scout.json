@@ -1,0 +1,191 @@
+{
+  "name": "Scout Email - Campaign Scout",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-scout",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "campaign-trigger",
+      "name": "Campaign Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-900, 0],
+      "webhookId": "scout-email-campaign-scout"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/campaigns/' + $('Campaign Trigger').item.json.body.campaign_id + '/scout' }}",
+        "options": {}
+      },
+      "id": "enqueue-scout",
+      "name": "Enqueue Scout",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-680, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "jobs",
+        "options": {}
+      },
+      "id": "split-jobs",
+      "name": "Split Scout Jobs",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [-460, 0]
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "wait-poll",
+      "name": "Wait Before Poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-240, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + ($json.status_url || ('/jobs/' + $json.job_id)) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "poll-job",
+      "name": "Poll Scout Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-20, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "complete", "leftValue": "={{ $json.state }}", "rightValue": "COMPLETE", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-complete",
+      "name": "State COMPLETE",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {},
+      "id": "complete-terminal",
+      "name": "Scout COMPLETE",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1120, -240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "retry", "leftValue": "={{ $json.state }}", "rightValue": "RETRY", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-retry",
+      "name": "State RETRY",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [420, 80]
+    },
+    {
+      "parameters": {"amount": 30, "unit": "seconds"},
+      "id": "retry-wait",
+      "name": "Bounded RETRY Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [660, 20]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "failed", "leftValue": "={{ $json.state }}", "rightValue": "FAILED", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-failed",
+      "name": "State FAILED",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [640, 180]
+    },
+    {
+      "parameters": {"errorMessage": "Scout backend job FAILED; inspect backend job/correlation_id"},
+      "id": "failed-terminal",
+      "name": "Scout FAILED",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1120, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "skipped", "leftValue": "={{ $json.state }}", "rightValue": "SKIPPED", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-skipped",
+      "name": "State SKIPPED",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [860, 260]
+    },
+    {
+      "parameters": {},
+      "id": "skipped-terminal",
+      "name": "Scout SKIPPED",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1120, 240]
+    },
+    {
+      "parameters": {"amount": 5, "unit": "seconds"},
+      "id": "running-wait",
+      "name": "PENDING RUNNING Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1120, 380]
+    }
+  ],
+  "connections": {
+    "Campaign Trigger": {"main": [[{"node": "Enqueue Scout", "type": "main", "index": 0}]]},
+    "Enqueue Scout": {"main": [[{"node": "Split Scout Jobs", "type": "main", "index": 0}]]},
+    "Split Scout Jobs": {"main": [[{"node": "Wait Before Poll", "type": "main", "index": 0}]]},
+    "Wait Before Poll": {"main": [[{"node": "Poll Scout Job", "type": "main", "index": 0}]]},
+    "Poll Scout Job": {"main": [[{"node": "State COMPLETE", "type": "main", "index": 0}]]},
+    "State COMPLETE": {"main": [[{"node": "Scout COMPLETE", "type": "main", "index": 0}], [{"node": "State RETRY", "type": "main", "index": 0}]]},
+    "State RETRY": {"main": [[{"node": "Bounded RETRY Wait", "type": "main", "index": 0}], [{"node": "State FAILED", "type": "main", "index": 0}]]},
+    "Bounded RETRY Wait": {"main": [[{"node": "Poll Scout Job", "type": "main", "index": 0}]]},
+    "State FAILED": {"main": [[{"node": "Scout FAILED", "type": "main", "index": 0}], [{"node": "State SKIPPED", "type": "main", "index": 0}]]},
+    "State SKIPPED": {"main": [[{"node": "Scout SKIPPED", "type": "main", "index": 0}], [{"node": "PENDING RUNNING Wait", "type": "main", "index": 0}]]},
+    "PENDING RUNNING Wait": {"main": [[{"node": "Poll Scout Job", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "00000000-0000-4000-8000-000000000024",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}

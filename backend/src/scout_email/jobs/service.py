@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -30,6 +31,10 @@ def sanitize_error_message(value: str) -> str:
     return _CONTROL_CHARACTERS.sub(" ", value).strip()[:1000]
 
 
+def job_correlation_id(job_id: int) -> str:
+    return str(uuid5(NAMESPACE_URL, f"scout-email:job:{job_id}"))
+
+
 def _dump_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -50,6 +55,9 @@ class JobService:
     async def _view(self, job: Job) -> JobView:
         runtime = await self.session.get(JobRuntime, job.id)
         return JobView(
+            job_id=job.id,
+            status_url=f"/jobs/{job.id}",
+            correlation_id=job_correlation_id(job.id),
             id=job.id,
             kind=job.job_type,
             state=job.state,

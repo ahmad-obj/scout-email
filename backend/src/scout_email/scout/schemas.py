@@ -1,8 +1,11 @@
 from pydantic import BaseModel, Field
 
+from scout_email.jobs.schemas import JobReference
+
 
 class ScoutEnqueueResponse(BaseModel):
     campaign_id: int
+    jobs: list[JobReference]
     job_ids: list[int]
 
 

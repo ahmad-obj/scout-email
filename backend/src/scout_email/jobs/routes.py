@@ -9,7 +9,7 @@ from scout_email.jobs.service import JobService
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-@router.post("", response_model=JobView, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=JobView, status_code=status.HTTP_202_ACCEPTED)
 async def enqueue(
     payload: JobEnqueueRequest,
     session: AsyncSession = Depends(get_session),

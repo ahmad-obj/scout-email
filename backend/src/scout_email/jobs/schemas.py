@@ -4,7 +4,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class JobView(BaseModel):
+class JobReference(BaseModel):
+    job_id: int
+    status_url: str
+    correlation_id: str
+
+
+class JobView(JobReference):
     id: int
     kind: str
     state: str

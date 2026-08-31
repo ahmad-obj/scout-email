@@ -1,0 +1,245 @@
+{
+  "name": "Scout Email - Lead Research",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-research",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "lead-trigger",
+      "name": "Lead Research Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1040, 0],
+      "webhookId": "scout-email-lead-research"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "lead-id",
+              "name": "lead_id",
+              "value": "={{ $('Lead Research Trigger').item.json.body.lead_id }}",
+              "type": "number"
+            },
+            {
+              "id": "stage-list",
+              "name": "stages",
+              "value": "=[\"ENRICH\",\"CRAWL_EVIDENCE\",\"RESEARCH\",\"STRATEGY\",\"WRITER_CRITIC\"]",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "stage-plan",
+      "name": "Backend Job Stage Plan",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-820, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "stages",
+        "options": {}
+      },
+      "id": "split-stages",
+      "name": "Split Backend Stages",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [-600, 0]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-stages",
+      "name": "Loop Over Backend Stages",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-380, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/jobs' }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({kind: $json.stages, payload: {lead_id: $json.lead_id}, idempotency_key: ($json.stages + ':lead:' + $json.lead_id).toLowerCase(), max_attempts: 3}) }}",
+        "options": {}
+      },
+      "id": "enqueue-stage",
+      "name": "Enqueue Backend Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-140, 80]
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "wait-stage",
+      "name": "Wait Before Job Poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [80, 80]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + ($json.status_url || ('/jobs/' + $json.job_id)) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "poll-stage",
+      "name": "Poll Backend Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "complete", "leftValue": "={{ $json.state }}", "rightValue": "COMPLETE", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "state-complete",
+      "name": "State COMPLETE",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [520, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "retry", "leftValue": "={{ $json.state }}", "rightValue": "RETRY", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "state-retry",
+      "name": "State RETRY",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [740, 160]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "retry-wait",
+      "name": "Bounded RETRY Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [980, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "failed", "leftValue": "={{ $json.state }}", "rightValue": "FAILED", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "state-failed",
+      "name": "State FAILED",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 240]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Lead research backend job FAILED; inspect job using correlation_id"
+      },
+      "id": "failed-terminal",
+      "name": "Research FAILED",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1420, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "skipped", "leftValue": "={{ $json.state }}", "rightValue": "SKIPPED", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "state-skipped",
+      "name": "State SKIPPED",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1180, 320]
+    },
+    {
+      "parameters": {},
+      "id": "skipped-terminal",
+      "name": "Research SKIPPED",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1420, 300]
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "active-wait",
+      "name": "PENDING RUNNING Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1420, 420]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SCOUT_EMAIL_BACKEND_URL + '/review' }}",
+        "options": {}
+      },
+      "id": "human-review",
+      "name": "Human Review Boundary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-140, -160]
+    }
+  ],
+  "connections": {
+    "Lead Research Trigger": {"main": [[{"node": "Backend Job Stage Plan", "type": "main", "index": 0}]]},
+    "Backend Job Stage Plan": {"main": [[{"node": "Split Backend Stages", "type": "main", "index": 0}]]},
+    "Split Backend Stages": {"main": [[{"node": "Loop Over Backend Stages", "type": "main", "index": 0}]]},
+    "Loop Over Backend Stages": {"main": [[{"node": "Human Review Boundary", "type": "main", "index": 0}], [{"node": "Enqueue Backend Job", "type": "main", "index": 0}]]},
+    "Enqueue Backend Job": {"main": [[{"node": "Wait Before Job Poll", "type": "main", "index": 0}]]},
+    "Wait Before Job Poll": {"main": [[{"node": "Poll Backend Job", "type": "main", "index": 0}]]},
+    "Poll Backend Job": {"main": [[{"node": "State COMPLETE", "type": "main", "index": 0}]]},
+    "State COMPLETE": {"main": [[{"node": "Loop Over Backend Stages", "type": "main", "index": 0}], [{"node": "State RETRY", "type": "main", "index": 0}]]},
+    "State RETRY": {"main": [[{"node": "Bounded RETRY Wait", "type": "main", "index": 0}], [{"node": "State FAILED", "type": "main", "index": 0}]]},
+    "Bounded RETRY Wait": {"main": [[{"node": "Poll Backend Job", "type": "main", "index": 0}]]},
+    "State FAILED": {"main": [[{"node": "Research FAILED", "type": "main", "index": 0}], [{"node": "State SKIPPED", "type": "main", "index": 0}]]},
+    "State SKIPPED": {"main": [[{"node": "Research SKIPPED", "type": "main", "index": 0}], [{"node": "PENDING RUNNING Wait", "type": "main", "index": 0}]]},
+    "PENDING RUNNING Wait": {"main": [[{"node": "Poll Backend Job", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "00000000-0000-4000-8000-000000000025",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}
