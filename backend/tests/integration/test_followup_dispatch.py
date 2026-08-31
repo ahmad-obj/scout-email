@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -26,7 +27,19 @@ from scout_email.db.models import (
     Sender,
 )
 from scout_email.db.session import create_engine_and_sessionmaker
+from scout_email.messaging.schemas import ProviderCompletionRequest
 from scout_email.messaging.service import MessagingEligibilityError, MessagingService
+
+
+class FakeN8nClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def post(self, url, *, json, headers, timeout):
+        self.calls.append(
+            {"url": url, "json": json, "headers": headers, "timeout": timeout}
+        )
+        return SimpleNamespace(status_code=202)
 
 
 async def _seed_approved_followup(session):
@@ -217,5 +230,61 @@ async def test_reply_after_approval_blocks_followup_dispatch(tmp_path):
             or 0
         )
         assert message_count == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gmail_followup_handoff_replies_to_original_message_and_callback_advances_stage(tmp_path):
+    engine, factory = create_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{tmp_path / 'followup-gmail.db'}"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with factory() as session:
+        _, _, contact, sender, thread, draft, followup = await _seed_approved_followup(session)
+        client = FakeN8nClient()
+        service = MessagingService(
+            session,
+            send_mode="gmail",
+            n8n_webhook_url="https://n8n.example/webhook/send-approved",
+            n8n_secret="test-secret",
+            http_client=client,
+        )
+
+        queued = await service.queue_and_dispatch_followup(
+            followup_id=followup.id,
+            recipient_id=contact.id,
+            sender_id=sender.id,
+        )
+        assert queued.state == MessageState.SENDING.value
+        assert len(client.calls) == 1
+        payload = client.calls[0]["json"]
+        assert payload["mode"] == "followup"
+        assert payload["provider_thread_id"] == "gmail-thread-1"
+        assert payload["reply_to_message_id"] == "gmail-initial-1"
+        assert payload["body"] == draft.body
+
+        persisted_followup = await session.get(Followup, followup.id)
+        persisted_thread = await session.get(EmailThread, thread.id)
+        assert persisted_followup is not None
+        assert persisted_followup.state == FollowupState.QUEUED.value
+        assert persisted_thread is not None and persisted_thread.followup_stage == 0
+
+        completed = await service.complete_provider_result(
+            message_id=queued.id,
+            completion=ProviderCompletionRequest(
+                status="SENT",
+                provider_message_id="gmail-followup-1",
+                provider_thread_id="gmail-thread-1",
+            ),
+        )
+        assert completed.state == MessageState.SENT.value
+        assert completed.provider_thread_id == "gmail-thread-1"
+        await session.refresh(persisted_followup)
+        await session.refresh(persisted_thread)
+        assert persisted_followup.state == FollowupState.SENT.value
+        assert persisted_thread.followup_stage == 1
 
     await engine.dispose()
