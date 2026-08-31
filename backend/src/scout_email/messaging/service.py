@@ -10,14 +10,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.approval.service import content_hash
-from scout_email.common.enums import MessageState
+from scout_email.common.enums import FollowupState, MessageState
 from scout_email.common.errors import NotFoundError, ScoutEmailError
 from scout_email.db.models import (
+    Bounce,
     Campaign,
     Contact,
     DoNotContact,
     EmailDraft,
     EmailThread,
+    Followup,
     Lead,
     OutboundMessage,
     Reply,
@@ -122,6 +124,7 @@ class MessagingService:
         recipient_id: int,
         sender_id: int,
         ignore_idempotency_key: str | None = None,
+        allow_prior_outreach: bool = False,
     ) -> EligibilityResult:
         draft = await self.session.get(EmailDraft, draft_id)
         if draft is None:
@@ -168,23 +171,25 @@ class MessagingService:
             for row in dnc_rows
         )
 
-        duplicate_query = select(func.count()).select_from(OutboundMessage).where(
-            OutboundMessage.campaign_id == campaign.id,
-            OutboundMessage.lead_id == lead.id,
-            func.lower(OutboundMessage.recipient_email) == normalized_email,
-            OutboundMessage.state.in_(
-                [
-                    MessageState.QUEUED.value,
-                    MessageState.SENDING.value,
-                    MessageState.SENT.value,
-                ]
-            ),
-        )
-        if ignore_idempotency_key:
-            duplicate_query = duplicate_query.where(
-                OutboundMessage.idempotency_key != ignore_idempotency_key
+        duplicate_outreach = False
+        if not allow_prior_outreach:
+            duplicate_query = select(func.count()).select_from(OutboundMessage).where(
+                OutboundMessage.campaign_id == campaign.id,
+                OutboundMessage.lead_id == lead.id,
+                func.lower(OutboundMessage.recipient_email) == normalized_email,
+                OutboundMessage.state.in_(
+                    [
+                        MessageState.QUEUED.value,
+                        MessageState.SENDING.value,
+                        MessageState.SENT.value,
+                    ]
+                ),
             )
-        duplicate_outreach = bool(await self.session.scalar(duplicate_query))
+            if ignore_idempotency_key:
+                duplicate_query = duplicate_query.where(
+                    OutboundMessage.idempotency_key != ignore_idempotency_key
+                )
+            duplicate_outreach = bool(await self.session.scalar(duplicate_query))
 
         human_reply_exists = bool(
             await self.session.scalar(
@@ -270,7 +275,6 @@ class MessagingService:
         if existing is not None:
             return _message_view(existing)
 
-        # This is the last state read before immutable message creation/provider handoff.
         eligibility = await self.evaluate_send_eligibility(
             draft_id=draft_id,
             recipient_id=recipient_id,
@@ -320,7 +324,6 @@ class MessagingService:
             await self.session.commit()
             return _message_view(message)
 
-        # Commit first so an immediate n8n callback can resolve the backend message ID.
         await self.session.commit()
         payload = {
             "message_id": message.id,
@@ -329,6 +332,149 @@ class MessagingService:
             "subject": message.subject,
             "body": message.body,
         }
+        await self._handoff_to_n8n(message=message, payload=payload)
+        return _message_view(message)
+
+    async def queue_and_dispatch_followup(
+        self,
+        *,
+        followup_id: int,
+        recipient_id: int,
+        sender_id: int,
+    ) -> MessageView:
+        """Dispatch an approved V1 stage-1 follow-up in the existing thread only."""
+        self._assert_transport_configuration()
+        followup = await self.session.get(Followup, followup_id)
+        if followup is None:
+            raise NotFoundError(f"Followup {followup_id} not found")
+        if followup.stage != 1 or followup.draft_id is None:
+            raise MessagingEligibilityError(["invalid_followup_stage"])
+
+        thread = await self.session.get(EmailThread, followup.thread_id)
+        if thread is None:
+            raise NotFoundError(f"Thread {followup.thread_id} not found")
+        draft = await self.session.get(EmailDraft, followup.draft_id)
+        if draft is None:
+            raise NotFoundError(f"Draft {followup.draft_id} not found")
+        lead = await self.session.get(Lead, draft.lead_id)
+        if lead is None or lead.id != thread.lead_id:
+            raise MessagingEligibilityError(["followup_lead_mismatch"])
+        contact = await self.session.get(Contact, recipient_id)
+        if contact is None or contact.lead_id != lead.id:
+            raise NotFoundError("recipient contact not found for lead")
+        sender = await self.session.get(Sender, sender_id)
+        if sender is None:
+            raise NotFoundError(f"Sender {sender_id} not found")
+
+        if not draft.approved_content_hash:
+            eligibility = await self.evaluate_send_eligibility(
+                draft_id=draft.id,
+                recipient_id=recipient_id,
+                sender_id=sender_id,
+                allow_prior_outreach=True,
+            )
+            raise MessagingEligibilityError(eligibility.reasons)
+
+        key = _idempotency_key(
+            campaign_id=lead.campaign_id,
+            lead_id=lead.id,
+            recipient_email=contact.normalized_email,
+            approved_hash=draft.approved_content_hash,
+            sequence_stage=f"followup:{followup.stage}:thread:{thread.id}",
+        )
+        existing = await self.session.scalar(
+            select(OutboundMessage).where(OutboundMessage.idempotency_key == key)
+        )
+        if existing is not None:
+            if existing.gmail_thread_id and existing.gmail_thread_id != thread.gmail_thread_id:
+                raise MessagingError("follow-up message belongs to a different provider thread")
+            return _message_view(existing)
+
+        reasons: list[str] = []
+        if followup.state != FollowupState.PENDING_APPROVAL.value:
+            reasons.append("followup_not_pending")
+        if thread.followup_stage >= 1:
+            reasons.append("max_stage_reached")
+        if thread.followup_cancelled:
+            reasons.append("thread_cancelled")
+        now = datetime.now(UTC)
+        if followup.due_at is not None:
+            due_at = followup.due_at
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=UTC)
+            if due_at > now:
+                reasons.append("followup_not_due")
+        hard_bounce_exists = bool(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(Bounce)
+                .join(OutboundMessage, OutboundMessage.id == Bounce.outbound_message_id)
+                .where(
+                    OutboundMessage.lead_id == lead.id,
+                    OutboundMessage.campaign_id == lead.campaign_id,
+                    Bounce.bounce_type == "HARD",
+                )
+            )
+        )
+        if hard_bounce_exists:
+            reasons.append("hard_bounce_exists")
+
+        eligibility = await self.evaluate_send_eligibility(
+            draft_id=draft.id,
+            recipient_id=recipient_id,
+            sender_id=sender_id,
+            ignore_idempotency_key=key,
+            allow_prior_outreach=True,
+        )
+        reasons.extend(reason for reason in eligibility.reasons if reason not in reasons)
+        if reasons:
+            raise MessagingEligibilityError(reasons)
+
+        message = OutboundMessage(
+            campaign_id=lead.campaign_id,
+            lead_id=lead.id,
+            draft_id=draft.id,
+            sender_id=sender_id,
+            recipient_email=contact.normalized_email,
+            subject=draft.subject,
+            body=draft.body,
+            state=(
+                MessageState.QUEUED.value
+                if self.send_mode == "mock"
+                else MessageState.SENDING.value
+            ),
+            idempotency_key=key,
+            queued_at=now,
+            gmail_thread_id=thread.gmail_thread_id,
+        )
+        self.session.add(message)
+        await self.session.flush()
+
+        if self.send_mode == "mock":
+            message.state = MessageState.SENT.value
+            message.gmail_message_id = f"mock-followup-message-{message.id}"
+            message.gmail_thread_id = thread.gmail_thread_id
+            message.sent_at = now
+            followup.state = FollowupState.SENT.value
+            thread.followup_stage = 1
+            await self.session.commit()
+            return _message_view(message)
+
+        followup.state = FollowupState.QUEUED.value
+        await self.session.commit()
+        payload = {
+            "message_id": message.id,
+            "recipient": message.recipient_email,
+            "sender": sender.email,
+            "subject": message.subject,
+            "body": message.body,
+            "mode": "followup",
+            "provider_thread_id": thread.gmail_thread_id,
+        }
+        await self._handoff_to_n8n(message=message, payload=payload)
+        return _message_view(message)
+
+    async def _handoff_to_n8n(self, *, message: OutboundMessage, payload: dict[str, Any]) -> None:
         headers = {"X-Scout-Email-Secret": self.n8n_secret or ""}
         try:
             response = await self._post_n8n(payload=payload, headers=headers)
@@ -342,7 +488,6 @@ class MessagingService:
             raise MessagingError(
                 f"n8n Gmail handoff returned HTTP {response.status_code}"
             )
-        return _message_view(message)
 
     async def _post_n8n(self, *, payload: dict[str, Any], headers: dict[str, str]):
         assert self.n8n_webhook_url is not None
@@ -371,6 +516,15 @@ class MessagingService:
         if message is None:
             raise NotFoundError(f"Message {message_id} not found")
 
+        followup = await self.session.scalar(
+            select(Followup).where(Followup.draft_id == message.draft_id).limit(1)
+        )
+        followup_thread = None
+        if followup is not None:
+            followup_thread = await self.session.get(EmailThread, followup.thread_id)
+            if followup_thread is None:
+                raise MessagingError("follow-up thread is missing")
+
         if completion.status == "FAILED":
             if message.state != MessageState.SENT.value:
                 message.state = MessageState.FAILED.value
@@ -379,6 +533,11 @@ class MessagingService:
 
         assert completion.provider_message_id is not None
         assert completion.provider_thread_id is not None
+        if followup_thread is not None and (
+            completion.provider_thread_id != followup_thread.gmail_thread_id
+        ):
+            raise MessagingError("follow-up provider completion changed thread")
+
         if message.state == MessageState.SENT.value:
             if (
                 message.gmail_message_id != completion.provider_message_id
@@ -402,7 +561,10 @@ class MessagingService:
         message.gmail_message_id = completion.provider_message_id
         message.gmail_thread_id = completion.provider_thread_id
         message.sent_at = datetime.now(UTC)
-        if existing_thread is None:
+        if followup is not None and followup_thread is not None:
+            followup.state = FollowupState.SENT.value
+            followup_thread.followup_stage = followup.stage
+        elif existing_thread is None:
             self.session.add(
                 EmailThread(
                     lead_id=message.lead_id,
