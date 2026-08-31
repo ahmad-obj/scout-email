@@ -430,6 +430,21 @@ class MessagingService:
         if reasons:
             raise MessagingEligibilityError(reasons)
 
+        original_message: OutboundMessage | None = None
+        if self.send_mode == "gmail":
+            original_message = await self.session.scalar(
+                select(OutboundMessage)
+                .where(
+                    OutboundMessage.gmail_thread_id == thread.gmail_thread_id,
+                    OutboundMessage.state == MessageState.SENT.value,
+                    OutboundMessage.draft_id != draft.id,
+                )
+                .order_by(OutboundMessage.sent_at.asc(), OutboundMessage.id.asc())
+                .limit(1)
+            )
+            if original_message is None or not original_message.gmail_message_id:
+                raise MessagingEligibilityError(["original_provider_message_missing"])
+
         message = OutboundMessage(
             campaign_id=lead.campaign_id,
             lead_id=lead.id,
@@ -460,6 +475,7 @@ class MessagingService:
             await self.session.commit()
             return _message_view(message)
 
+        assert original_message is not None
         followup.state = FollowupState.QUEUED.value
         await self.session.commit()
         payload = {
@@ -470,6 +486,7 @@ class MessagingService:
             "body": message.body,
             "mode": "followup",
             "provider_thread_id": thread.gmail_thread_id,
+            "reply_to_message_id": original_message.gmail_message_id,
         }
         await self._handoff_to_n8n(message=message, payload=payload)
         return _message_view(message)
