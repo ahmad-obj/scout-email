@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +23,18 @@ class Settings(BaseSettings):
     http_crawl_concurrency: int = Field(default=8, ge=1, le=32)
     gemini_api_key: str | None = None
     ollama_base_url: str = "http://host.docker.internal:11434"
+    n8n_send_webhook_url: str | None = None
     n8n_webhook_secret: str | None = None
+
+    @model_validator(mode="after")
+    def require_gmail_transport_configuration(self) -> "Settings":
+        if self.send_mode == "gmail" and (
+            not self.n8n_send_webhook_url or not self.n8n_webhook_secret
+        ):
+            raise ValueError(
+                "gmail send mode requires n8n send webhook URL and shared secret"
+            )
+        return self
 
 
 settings = Settings()

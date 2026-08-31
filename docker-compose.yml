@@ -1,0 +1,76 @@
+services:
+  browser-worker:
+    build:
+      context: .
+      dockerfile: browser-worker/Dockerfile
+    environment:
+      BROWSER_WORKER_HEADLESS: "true"
+      BROWSER_WORKER_MAX_CONCURRENCY: ${BROWSER_WORKER_MAX_CONCURRENCY:-2}
+      BROWSER_WORKER_NAVIGATION_TIMEOUT_MS: ${BROWSER_WORKER_NAVIGATION_TIMEOUT_MS:-30000}
+      BROWSER_WORKER_ARTIFACT_DIR: /data/browser-artifacts
+      MAPS_LIVE_SMOKE_ENABLED: "false"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  outreach-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      SCOUT_EMAIL_DATA_DIR: /data
+      SCOUT_EMAIL_DATABASE_URL: sqlite+aiosqlite:////data/scout_email.db
+      SCOUT_EMAIL_BROWSER_WORKER_URL: http://browser-worker:8010
+      SCOUT_EMAIL_SEND_MODE: ${SCOUT_EMAIL_SEND_MODE:-mock}
+      SCOUT_EMAIL_MAPS_LIVE_SMOKE_ENABLED: "false"
+      SCOUT_EMAIL_MAX_BROWSER_CONCURRENCY: ${SCOUT_EMAIL_MAX_BROWSER_CONCURRENCY:-2}
+      SCOUT_EMAIL_HTTP_CRAWL_CONCURRENCY: ${SCOUT_EMAIL_HTTP_CRAWL_CONCURRENCY:-8}
+      SCOUT_EMAIL_GEMINI_API_KEY: ${SCOUT_EMAIL_GEMINI_API_KEY:-}
+      SCOUT_EMAIL_OLLAMA_BASE_URL: ${SCOUT_EMAIL_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      SCOUT_EMAIL_N8N_SEND_WEBHOOK_URL: ${SCOUT_EMAIL_N8N_SEND_WEBHOOK_URL:-}
+      SCOUT_EMAIL_N8N_WEBHOOK_SECRET: ${SCOUT_EMAIL_N8N_WEBHOOK_SECRET:-}
+      SCOUT_EMAIL_REPLY_CLASSIFIER_PROVIDER: ${SCOUT_EMAIL_REPLY_CLASSIFIER_PROVIDER:-}
+      SCOUT_EMAIL_REPLY_CLASSIFIER_MODEL: ${SCOUT_EMAIL_REPLY_CLASSIFIER_MODEL:-}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./data:/data
+      - ./config:/app/config:ro
+    ports:
+      - 127.0.0.1:8000:8000
+    depends_on:
+      browser-worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    environment:
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      SCOUT_EMAIL_BACKEND_URL: http://outreach-api:8000
+      SCOUT_EMAIL_N8N_WEBHOOK_SECRET: ${SCOUT_EMAIL_N8N_WEBHOOK_SECRET:-}
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    ports:
+      - 127.0.0.1:5678:5678
+    depends_on:
+      outreach-api:
+        condition: service_healthy
+    restart: unless-stopped
