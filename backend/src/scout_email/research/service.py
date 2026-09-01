@@ -100,6 +100,10 @@ class ResearchService:
                 }
                 for row in contacts
             ],
+            "reference_constraints": {
+                "allowed_contact_ids": [row.id for row in contacts],
+                "contact_must_be_null": not contacts,
+            },
         }
 
         try:
@@ -110,6 +114,8 @@ class ResearchService:
                 prompt_version=self.prompt_version,
             )
             output = generated.output
+            if not contacts and output.contact is not None:
+                output = output.model_copy(update={"contact": None})
             self._validate_references(
                 output,
                 evidence_ids={row.id for row in evidence},
