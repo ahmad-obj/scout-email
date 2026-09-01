@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from scout_email.browser.client import BrowserWorkerClient, BrowserWorkerError
 from scout_email.common.enums import LeadState, WebsiteState
 from scout_email.crawl.persistence import CrawlPersistenceService
 from scout_email.crawl.site import crawl_site
-from scout_email.db.models import Evidence, Lead, Website
+from scout_email.db.models import Evidence, Lead, LeadSource, Website
 from scout_email.db.session import SessionLocal
 from scout_email.enrichment.service import EnrichmentService, PublicPage
 from scout_email.enrichment.website import WebsiteVerification, verify_website
@@ -18,6 +19,7 @@ from scout_email.evidence.service import EvidenceService
 from scout_email.jobs.service import JobService
 from scout_email.jobs.worker import run_one
 from scout_email.llm.gateway import LLMGateway
+from scout_email.llm.persistence import LLMGenerationRecorder
 from scout_email.llm.providers.gemini import GeminiProvider
 from scout_email.llm.providers.ollama import OllamaProvider
 from scout_email.research.service import ResearchService
@@ -71,7 +73,29 @@ def _lead_id(payload: dict) -> int:
     return lead_id
 
 
-def _lead_homepage(lead: Lead) -> str | None:
+async def _lead_homepage(session, lead: Lead) -> str | None:
+    sources = list(
+        (
+            await session.scalars(
+                select(LeadSource)
+                .where(LeadSource.lead_id == lead.id)
+                .order_by(LeadSource.id.desc())
+            )
+        ).all()
+    )
+    for source in sources:
+        if not source.raw_json:
+            continue
+        try:
+            raw = json.loads(source.raw_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        website = raw.get("website")
+        if isinstance(website, str) and website.strip():
+            return website.strip()
+
     if not lead.canonical_domain:
         return None
     return f"https://{lead.canonical_domain.strip().strip('/')}/"
@@ -132,6 +156,9 @@ def build_handlers(
     playbook: Any | None,
     data_root: Path,
 ):
+    if isinstance(gateway, LLMGateway):
+        gateway.recorder = LLMGenerationRecorder(session)
+
     handlers = dict(scout_handlers(session, browser))
 
     async def enrich(payload: dict) -> dict:
@@ -139,7 +166,7 @@ def build_handlers(
         lead = await session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f"lead {lead_id} does not exist")
-        verification = await verify_website(_lead_homepage(lead))
+        verification = await verify_website(await _lead_homepage(session, lead))
         await EnrichmentService(session).persist(lead_id, verification, [])
         return verification.model_dump(mode="json")
 
