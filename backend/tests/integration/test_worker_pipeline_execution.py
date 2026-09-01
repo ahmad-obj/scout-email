@@ -215,7 +215,7 @@ async def test_worker_executes_enrich_crawl_research_strategy_and_writer(monkeyp
         await session.flush()
         lead = Lead(
             campaign_id=campaign.id,
-            state=LeadState.DISCOVERED.value,
+            state=LeadState.QUALIFIED.value,
             name="Worker Dental",
             normalized_name="worker dental",
             category="Dentist",
