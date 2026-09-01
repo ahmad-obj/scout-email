@@ -5,7 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "campaign-scout",
-        "responseMode": "lastNode",
+        "responseMode": "onReceived",
         "options": {}
       },
       "id": "campaign-trigger",
