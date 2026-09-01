@@ -21,9 +21,10 @@ class Settings(BaseSettings):
     maps_live_smoke_enabled: bool = False
     max_browser_concurrency: int = Field(default=2, ge=1, le=3)
     http_crawl_concurrency: int = Field(default=8, ge=1, le=32)
-    llm_provider: Literal["gemini", "ollama"] | None = None
+    llm_provider: Literal["gemini", "ollama", "openrouter"] | None = None
     llm_model: str | None = None
     gemini_api_key: str | None = None
+    openrouter_api_key: str | None = None
     ollama_base_url: str = "http://host.docker.internal:11434"
     writing_playbook_dir: Path = Path("../config/weberaise")
     n8n_send_webhook_url: str | None = None

@@ -23,6 +23,7 @@ from scout_email.llm.gateway import LLMGateway
 from scout_email.llm.persistence import LLMGenerationRecorder
 from scout_email.llm.providers.gemini import GeminiProvider
 from scout_email.llm.providers.ollama import OllamaProvider
+from scout_email.llm.providers.openrouter import OpenRouterProvider
 from scout_email.research.service import ResearchService
 from scout_email.scout.jobs import scout_handlers
 from scout_email.settings import Settings, settings
@@ -58,6 +59,10 @@ def build_gateway(config: Settings) -> LLMGateway | None:
         provider = GeminiProvider(api_key=config.gemini_api_key, model=model)
     elif provider_name == "ollama":
         provider = OllamaProvider(model=model, base_url=config.ollama_base_url)
+    elif provider_name == "openrouter":
+        if not config.openrouter_api_key:
+            raise ValueError("OpenRouter API key is required for llm_provider=openrouter")
+        provider = OpenRouterProvider(api_key=config.openrouter_api_key, model=model)
     else:
         raise ValueError(f"unsupported llm provider: {provider_name}")
 

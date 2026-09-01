@@ -6,7 +6,7 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
 
 - Docker Engine with Docker Compose v2
 - Git
-- Optional: a Gemini API key or an Ollama server for model-backed stages
+- Optional: an OpenRouter or Gemini API key, or an Ollama server, for model-backed stages
 
 ## First run
 
@@ -18,6 +18,14 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
    ```
 
 2. Keep `SCOUT_EMAIL_SEND_MODE=mock`. Configure one LLM provider only if you want the model-backed `RESEARCH`, `STRATEGY`, and `WRITER_CRITIC` stages to execute.
+
+   OpenRouter example:
+
+   ```dotenv
+   SCOUT_EMAIL_LLM_PROVIDER=openrouter
+   SCOUT_EMAIL_LLM_MODEL=google/gemini-3.1-flash-lite
+   SCOUT_EMAIL_OPENROUTER_API_KEY=<your-key>
+   ```
 
    Gemini example:
 
@@ -35,7 +43,7 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
    SCOUT_EMAIL_OLLAMA_BASE_URL=http://host.docker.internal:11434
    ```
 
-   `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL` are a required pair. Leave both blank to run the non-LLM stages only. Model-backed jobs then remain visibly retryable/failed rather than silently bypassing model work.
+   `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL` are a required pair. Leave both blank to run the non-LLM stages only. Model-backed jobs then remain visibly retryable/failed rather than silently bypassing model work. API keys belong only in local/runtime environment configuration; never commit them.
 
 3. Build and start the local stack:
 
@@ -164,9 +172,11 @@ docker compose down
 
 **Google Maps selector smoke failure** — Do not enable broad live traffic. Run only the opt-in bounded Maps smoke above and inspect selectors before changing extraction logic.
 
-**Model-backed jobs fail immediately** — Configure both `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL`. For Gemini also configure `SCOUT_EMAIL_GEMINI_API_KEY`; for Ollama confirm the selected model exists and the worker can reach `SCOUT_EMAIL_OLLAMA_BASE_URL`.
+**Model-backed jobs fail immediately** — Configure both `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL`. For OpenRouter also configure `SCOUT_EMAIL_OPENROUTER_API_KEY`; for Gemini configure `SCOUT_EMAIL_GEMINI_API_KEY`; for Ollama confirm the selected model exists and the worker can reach `SCOUT_EMAIL_OLLAMA_BASE_URL`.
 
-**Model rate limit/provider unavailable** — Check the configured provider and model, retry only through the bounded backend job policy, or use the alternate configured provider. Do not bypass structured-output validation.
+**Model rate limit/provider unavailable** — Check the configured provider and model, retry only through the bounded backend job policy, or use an alternate configured provider. Do not bypass structured-output validation.
+
+**OpenRouter model rejects structured output** — Select an OpenRouter model whose endpoint supports JSON-schema structured outputs. The provider intentionally sends the production response schema rather than silently accepting free-form output.
 
 **Crawl timeout** — Inspect the job state and browser-worker logs. The crawler is bounded; do not remove SSRF/public-network guards or timeout limits to make a site pass.
 
