@@ -5,6 +5,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.browser.client import BrowserWorkerClient
+from scout_email.campaigns.models import CampaignPolicy
+from scout_email.campaigns.schemas import QualificationPolicy
 from scout_email.campaigns.service import CampaignService
 from scout_email.common.enums import LeadState
 from scout_email.common.errors import InvalidStateTransitionError
@@ -74,8 +76,13 @@ class ScoutService:
         if self.browser is None:
             raise RuntimeError("ScoutService requires a browser client to execute search jobs")
 
-        campaign_view = await CampaignService(self.session).get(payload.campaign_id)
-        minimum_rating = campaign_view.qualification.minimum_rating
+        policy_row = await self.session.get(CampaignPolicy, payload.campaign_id)
+        qualification = (
+            QualificationPolicy.model_validate_json(policy_row.qualification_json)
+            if policy_row is not None
+            else QualificationPolicy()
+        )
+        minimum_rating = qualification.minimum_rating
         remaining = min(payload.max_results, target - current)
         browser_leads = await self.browser.search_maps(payload.query, remaining)
         ingest = LeadIngestService(self.session)
