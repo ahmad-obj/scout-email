@@ -12,6 +12,7 @@ from scout_email.common.enums import LeadState, WebsiteState
 from scout_email.crawl.persistence import CrawlPersistenceService
 from scout_email.crawl.site import crawl_site
 from scout_email.db.models import Evidence, Lead, LeadSource, Website
+from scout_email.db.repositories import LeadRepository
 from scout_email.db.session import SessionLocal
 from scout_email.enrichment.service import EnrichmentService, PublicPage
 from scout_email.enrichment.website import WebsiteVerification, verify_website
@@ -136,6 +137,15 @@ async def _persist_non_live_website_evidence(session, *, lead_id: int, website: 
         await session.commit()
 
 
+async def _mark_research_pending(session, lead: Lead) -> None:
+    current = LeadState(lead.state)
+    if current == LeadState.RESEARCH_PENDING:
+        return
+    await LeadRepository(session).transition(lead.id, LeadState.RESEARCH_PENDING)
+    await session.commit()
+    await session.refresh(lead)
+
+
 def _research_page_urls(result) -> list[str]:
     urls = list(dict.fromkeys(page.url for page in result.pages))
 
@@ -187,6 +197,7 @@ def build_handlers(
                 lead_id=lead_id,
                 website=website,
             )
+            await _mark_research_pending(session, lead)
             return {
                 "status": "SKIPPED_NON_LIVE",
                 "website_state": website.state,
@@ -220,6 +231,7 @@ def build_handlers(
             lead_id=lead_id,
             homepage_url=homepage_url,
         )
+        await _mark_research_pending(session, lead)
         return {
             "status": "COMPLETE",
             "pages": len(result.pages),
