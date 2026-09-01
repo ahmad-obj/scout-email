@@ -17,11 +17,15 @@ from scout_email.enrichment.website import WebsiteVerification, verify_website
 from scout_email.evidence.service import EvidenceService
 from scout_email.jobs.service import JobService
 from scout_email.jobs.worker import run_one
+from scout_email.llm.gateway import LLMGateway
+from scout_email.llm.providers.gemini import GeminiProvider
+from scout_email.llm.providers.ollama import OllamaProvider
 from scout_email.research.service import ResearchService
 from scout_email.scout.jobs import scout_handlers
-from scout_email.settings import settings
+from scout_email.settings import Settings, settings
 from scout_email.strategy.service import StrategyService
 from scout_email.writing.critic import CriticService
+from scout_email.writing.playbook import load_playbook
 from scout_email.writing.quality import WriterCriticQualityLoop
 from scout_email.writing.writer import WriterService
 
@@ -34,6 +38,30 @@ WORKER_JOB_KINDS = (
     "STRATEGY",
     "WRITER_CRITIC",
 )
+RUNTIME_LLM_TASKS = ("researcher", "strategist", "writer", "critic")
+
+
+def build_gateway(config: Settings) -> LLMGateway | None:
+    provider_name = (config.llm_provider or "").strip().lower()
+    model = (config.llm_model or "").strip()
+    if not provider_name and not model:
+        return None
+    if not provider_name or not model:
+        raise ValueError("llm provider and model must both be configured")
+
+    if provider_name == "gemini":
+        if not config.gemini_api_key:
+            raise ValueError("Gemini API key is required for llm_provider=gemini")
+        provider = GeminiProvider(api_key=config.gemini_api_key, model=model)
+    elif provider_name == "ollama":
+        provider = OllamaProvider(model=model, base_url=config.ollama_base_url)
+    else:
+        raise ValueError(f"unsupported llm provider: {provider_name}")
+
+    return LLMGateway(
+        providers={provider.name: provider},
+        task_routes={task: provider.name for task in RUNTIME_LLM_TASKS},
+    )
 
 
 def _lead_id(payload: dict) -> int:
@@ -256,6 +284,15 @@ async def run_worker_once(
         )
 
 
+async def _close_gateway(gateway: LLMGateway | None) -> None:
+    if gateway is None:
+        return
+    for provider in gateway.providers.values():
+        close = getattr(provider, "aclose", None)
+        if close is not None:
+            await close()
+
+
 async def run_forever(
     *,
     session_factory=SessionLocal,
@@ -274,8 +311,13 @@ async def run_forever(
         raise ValueError("max_iterations must be positive when provided")
 
     owns_browser = browser is None
+    owns_gateway = gateway is None
     if browser is None:
         browser = BrowserWorkerClient(settings.browser_worker_url)
+    if gateway is None:
+        gateway = build_gateway(settings)
+    if playbook is None:
+        playbook = load_playbook(settings.writing_playbook_dir)
     data_root = Path(data_root or settings.data_dir)
 
     iterations = 0
@@ -293,6 +335,8 @@ async def run_forever(
             if not processed and poll_interval_seconds:
                 await asyncio.sleep(poll_interval_seconds)
     finally:
+        if owns_gateway:
+            await _close_gateway(gateway)
         if owns_browser:
             await browser.aclose()
 
