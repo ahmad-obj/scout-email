@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.common.enums import ClaimClass, LeadState
 from scout_email.db.models import Contact, Evidence, Lead, ResearchReport
+from scout_email.db.repositories import LeadRepository
 from scout_email.llm.gateway import LLMGateway
 from scout_email.research.schemas import (
     BusinessModelSummary,
@@ -35,8 +36,10 @@ class ResearchService:
         if lead is None:
             raise ValueError(f"lead {lead_id} does not exist")
 
-        lead.state = LeadState.RESEARCHING.value
+        lead_repo = LeadRepository(self.session)
+        await lead_repo.transition(lead_id, LeadState.RESEARCHING)
         await self.session.commit()
+        await self.session.refresh(lead)
 
         evidence = list(
             (
@@ -113,8 +116,10 @@ class ResearchService:
                 contact_ids={row.id for row in contacts},
             )
         except Exception:
-            lead.state = LeadState.RESEARCH_PENDING.value
-            await self.session.commit()
+            current = await self.session.get(Lead, lead_id)
+            if current is not None and current.state == LeadState.RESEARCHING.value:
+                await lead_repo.transition(lead_id, LeadState.RESEARCH_PENDING)
+                await self.session.commit()
             raise
 
         target_state = (
@@ -164,8 +169,9 @@ class ResearchService:
             model_id=model_id,
         )
         self.session.add(report)
-        lead.state = target_state.value
+        await LeadRepository(self.session).transition(lead.id, target_state)
         await self.session.commit()
+        await self.session.refresh(lead)
 
     @staticmethod
     def _insufficient_output(lead: Lead) -> ResearchOutput:
