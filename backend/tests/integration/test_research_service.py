@@ -226,3 +226,136 @@ async def test_unknown_evidence_reference_fails_closed_and_exits_researching(tmp
         assert await session.scalar(select(func.count()).select_from(ResearchReport)) == 0
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_researcher_clears_generated_contact_when_no_verified_contacts(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        lead = await _lead(session, name="No Contact Co")
+        evidence = Evidence(
+            lead_id=lead.id,
+            kind="website_verification",
+            claim_class="OBSERVED_FACT",
+            claim="Website is live",
+            source_type="website_verification",
+            source_url="https://example.com/",
+            confidence=1.0,
+        )
+        session.add(evidence)
+        await session.commit()
+        await session.refresh(evidence)
+
+        payload = json.loads(FIXTURE.read_text())
+        payload["strengths"] = [{"text": "Website is live", "evidence_ids": [evidence.id]}]
+        payload["website_findings"] = []
+        payload["technical_findings"] = []
+        payload["contact"] = {"contact_id": 12345}
+        provider = FakeProvider([json.dumps(payload)])
+        gateway = LLMGateway(
+            providers={"fake": provider},
+            task_routes={"researcher": "fake"},
+        )
+        service = ResearchService(session, gateway=gateway)
+
+        output = await service.research(lead_id=lead.id)
+
+        assert output.contact is None
+        assert len(provider.calls) == 1
+        await session.refresh(lead)
+        assert lead.state == LeadState.RESEARCHED.value
+        report = await session.scalar(select(ResearchReport).where(ResearchReport.lead_id == lead.id))
+        assert report is not None
+        assert json.loads(report.dossier_json)["contact"] is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_researcher_context_declares_contact_must_be_null_when_none_are_verified(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        lead = await _lead(session, name="No Contact Context Co")
+        evidence = Evidence(
+            lead_id=lead.id,
+            kind="website_verification",
+            claim_class="OBSERVED_FACT",
+            claim="Website is live",
+            source_type="website_verification",
+            source_url="https://example.com/",
+            confidence=1.0,
+        )
+        session.add(evidence)
+        await session.commit()
+        await session.refresh(evidence)
+
+        payload = json.loads(FIXTURE.read_text())
+        payload["strengths"] = [{"text": "Website is live", "evidence_ids": [evidence.id]}]
+        payload["website_findings"] = []
+        payload["technical_findings"] = []
+        payload["contact"] = None
+        provider = FakeProvider([json.dumps(payload)])
+        gateway = LLMGateway(
+            providers={"fake": provider},
+            task_routes={"researcher": "fake"},
+        )
+        service = ResearchService(session, gateway=gateway)
+
+        await service.research(lead_id=lead.id)
+
+        sent_context = json.loads(provider.calls[0]["user"])
+        assert sent_context["reference_constraints"] == {
+            "allowed_contact_ids": [],
+            "contact_must_be_null": True,
+        }
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unknown_contact_reference_still_fails_closed_when_verified_contacts_exist(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        lead = await _lead(session, name="Verified Contact Co")
+        contact = Contact(
+            lead_id=lead.id,
+            email="hello@example.com",
+            normalized_email="hello@example.com",
+            contact_type="business",
+            state="VERIFIED",
+            source_url="https://example.com/contact",
+            confidence=1.0,
+        )
+        evidence = Evidence(
+            lead_id=lead.id,
+            kind="website_verification",
+            claim_class="OBSERVED_FACT",
+            claim="Website is live",
+            source_type="website_verification",
+            source_url="https://example.com/",
+            confidence=1.0,
+        )
+        session.add_all([contact, evidence])
+        await session.commit()
+        await session.refresh(evidence)
+
+        payload = json.loads(FIXTURE.read_text())
+        payload["strengths"] = [{"text": "Website is live", "evidence_ids": [evidence.id]}]
+        payload["website_findings"] = []
+        payload["technical_findings"] = []
+        payload["contact"] = {"contact_id": 99999}
+        provider = FakeProvider([json.dumps(payload)])
+        gateway = LLMGateway(
+            providers={"fake": provider},
+            task_routes={"researcher": "fake"},
+        )
+        service = ResearchService(session, gateway=gateway)
+
+        with pytest.raises(ResearchEvidenceError, match="invalid contact ID"):
+            await service.research(lead_id=lead.id)
+
+        await session.refresh(lead)
+        assert lead.state == LeadState.RESEARCH_PENDING.value
+        assert await session.scalar(select(func.count()).select_from(ResearchReport)) == 0
+
+    await engine.dispose()
