@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     writing_playbook_dir: Path = Path("../config/weberaise")
     n8n_send_webhook_url: str | None = None
     n8n_webhook_secret: str | None = None
+
+    @field_validator("llm_provider", "llm_model", mode="before")
+    @classmethod
+    def blank_llm_values_are_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def require_runtime_configuration_pairs(self) -> "Settings":
