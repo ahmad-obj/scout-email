@@ -40,6 +40,31 @@ def test_build_gateway_requires_gemini_key(tmp_path):
         runtime.build_gateway(configured)
 
 
+def test_build_gateway_routes_all_worker_tasks_to_openrouter(tmp_path):
+    configured = Settings(
+        data_dir=tmp_path,
+        llm_provider="openrouter",
+        llm_model="google/gemini-3.1-flash-lite",
+        openrouter_api_key="secret",
+    )
+    gateway = runtime.build_gateway(configured)
+    assert gateway is not None
+    assert set(gateway.task_routes) == RUNTIME_TASKS
+    assert set(gateway.providers) == {"openrouter"}
+    assert gateway.providers["openrouter"].model == "google/gemini-3.1-flash-lite"
+
+
+def test_build_gateway_requires_openrouter_key(tmp_path):
+    configured = Settings(
+        data_dir=tmp_path,
+        llm_provider="openrouter",
+        llm_model="google/gemini-3.1-flash-lite",
+        openrouter_api_key=None,
+    )
+    with pytest.raises(ValueError, match="OpenRouter API key"):
+        runtime.build_gateway(configured)
+
+
 @pytest.mark.asyncio
 async def test_worker_handlers_attach_generation_recorder(tmp_path):
     configured = Settings(
@@ -76,3 +101,4 @@ def test_compose_passes_llm_configuration_to_worker():
     worker = rendered.split("\n  outreach-worker:", 1)[1].split("\n  n8n:", 1)[0]
     assert "SCOUT_EMAIL_LLM_PROVIDER" in worker
     assert "SCOUT_EMAIL_LLM_MODEL" in worker
+    assert "SCOUT_EMAIL_OPENROUTER_API_KEY" in worker
