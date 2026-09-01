@@ -107,6 +107,28 @@ class FixtureResearchGateway:
 
 
 @pytest.mark.asyncio
+async def test_worker_handler_registry_covers_all_n8n_stages(tmp_path):
+    runtime = import_module("scout_email.jobs.runtime")
+    engine, factory = create_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{tmp_path / 'registry.db'}"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with factory() as session:
+        handlers = runtime.build_handlers(
+            session,
+            browser=FixtureMapsBrowser(),
+            gateway=FixtureResearchGateway(),
+            playbook=object(),
+            data_root=tmp_path,
+        )
+        assert set(handlers) == EXPECTED_JOB_KINDS
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_worker_runtime_consumes_maps_job_and_persists_lead(tmp_path):
     runtime = import_module("scout_email.jobs.runtime")
     assert hasattr(runtime, "run_worker_once"), "worker process never claims queued jobs"
