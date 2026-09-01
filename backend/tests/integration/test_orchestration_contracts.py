@@ -137,3 +137,25 @@ def test_lead_research_workflow_is_backend_driven_and_stops_at_human_review():
     assert "/review" in rendered
     assert "status_url" in rendered
     assert "correlation_id" in rendered
+
+
+def test_campaign_scout_dispatches_each_qualified_lead_to_research_workflow():
+    workflow = _load_workflow(CAMPAIGN_WORKFLOW)
+    nodes = {node["name"]: node for node in workflow["nodes"]}
+
+    assert "Split Qualified Leads" in nodes
+    assert "Dispatch Lead Research" in nodes
+
+    split = nodes["Split Qualified Leads"]
+    dispatch = nodes["Dispatch Lead Research"]
+    assert split["type"] == "n8n-nodes-base.splitOut"
+    assert "qualified_lead_ids" in json.dumps(split["parameters"])
+    assert dispatch["type"] == "n8n-nodes-base.httpRequest"
+    assert dispatch["parameters"]["method"] == "POST"
+    assert "lead-research" in json.dumps(dispatch["parameters"])
+    assert "lead_id" in json.dumps(dispatch["parameters"])
+
+    complete_targets = workflow["connections"]["Scout COMPLETE"]["main"][0]
+    assert any(target["node"] == "Split Qualified Leads" for target in complete_targets)
+    split_targets = workflow["connections"]["Split Qualified Leads"]["main"][0]
+    assert any(target["node"] == "Dispatch Lead Research" for target in split_targets)
