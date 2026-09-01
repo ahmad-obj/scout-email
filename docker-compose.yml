@@ -55,6 +55,29 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  outreach-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: python -m scout_email.jobs.runtime
+    environment:
+      SCOUT_EMAIL_DATA_DIR: /data
+      SCOUT_EMAIL_DATABASE_URL: sqlite+aiosqlite:////data/scout_email.db
+      SCOUT_EMAIL_BROWSER_WORKER_URL: http://browser-worker:8010
+      SCOUT_EMAIL_SEND_MODE: mock
+      SCOUT_EMAIL_MAPS_LIVE_SMOKE_ENABLED: "false"
+      SCOUT_EMAIL_GEMINI_API_KEY: ${SCOUT_EMAIL_GEMINI_API_KEY:-}
+      SCOUT_EMAIL_OLLAMA_BASE_URL: ${SCOUT_EMAIL_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./data:/data
+      - ./config:/app/config:ro
+    depends_on:
+      browser-worker:
+        condition: service_healthy
+    restart: unless-stopped
+
   n8n:
     image: n8nio/n8n:latest
     environment:
