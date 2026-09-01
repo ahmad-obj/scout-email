@@ -159,3 +159,13 @@ def test_campaign_scout_dispatches_each_qualified_lead_to_research_workflow():
     assert any(target["node"] == "Split Qualified Leads" for target in complete_targets)
     split_targets = workflow["connections"]["Split Qualified Leads"]["main"][0]
     assert any(target["node"] == "Dispatch Lead Research" for target in split_targets)
+
+
+def test_long_running_orchestration_webhooks_acknowledge_immediately():
+    campaign = _load_workflow(CAMPAIGN_WORKFLOW)
+    research = _load_workflow(RESEARCH_WORKFLOW)
+    campaign_trigger = next(node for node in campaign["nodes"] if node["name"] == "Campaign Trigger")
+    research_trigger = next(node for node in research["nodes"] if node["name"] == "Lead Research Trigger")
+
+    assert campaign_trigger["parameters"]["responseMode"] == "onReceived"
+    assert research_trigger["parameters"]["responseMode"] == "onReceived"
