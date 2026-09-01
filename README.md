@@ -80,6 +80,23 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
 
 9. Use mock sending first. Do not enable Gmail merely to test the application.
 
+## Release verification
+
+The default release gate is deterministic and makes no live Google Maps, Gmail, or paid-provider request:
+
+```bash
+bash scripts/verify_v1.sh
+```
+
+Run the live Maps check only as an explicit bounded smoke test. It performs one real query and caps the returned businesses:
+
+```bash
+cd browser-worker
+MAPS_LIVE_SMOKE_ENABLED=true uv run pytest tests/test_maps_live.py -q
+```
+
+Do not turn this into a broad scraper test. A selector failure should stop the smoke and be investigated before any larger run.
+
 ## Gmail enablement and owned-address smoke test
 
 Real Gmail transport is fail-closed. `SCOUT_EMAIL_SEND_MODE=gmail` is rejected unless both `SCOUT_EMAIL_N8N_SEND_WEBHOOK_URL` and `SCOUT_EMAIL_N8N_WEBHOOK_SECRET` are configured.
@@ -145,7 +162,7 @@ docker compose down
 
 **browser-worker unavailable** — Check `docker compose ps` and `docker compose logs browser-worker`. Confirm its health endpoint succeeds inside the Docker network and that `/data` is writable.
 
-**Google Maps selector smoke failure** — Do not enable broad live traffic. Run only the opt-in bounded Maps smoke described by the test suite, with at most three results, and inspect selectors before changing extraction logic.
+**Google Maps selector smoke failure** — Do not enable broad live traffic. Run only the opt-in bounded Maps smoke above and inspect selectors before changing extraction logic.
 
 **Model-backed jobs fail immediately** — Configure both `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL`. For Gemini also configure `SCOUT_EMAIL_GEMINI_API_KEY`; for Ollama confirm the selected model exists and the worker can reach `SCOUT_EMAIL_OLLAMA_BASE_URL`.
 
