@@ -27,6 +27,7 @@ from scout_email.db.models import (
     Reply,
     Sender,
 )
+from scout_email.db.repositories import LeadRepository
 from scout_email.db.session import create_engine_and_sessionmaker
 from scout_email.enrichment.service import EnrichmentService, PublicPage
 from scout_email.enrichment.website import WebsiteVerification
@@ -288,6 +289,9 @@ async def _enrich_crawl_and_evidence(
         homepage_url=home_url,
     )
     assert len(bundle.screenshots) == 2
+    await LeadRepository(session).transition(lead.id, LeadState.RESEARCH_PENDING)
+    await session.commit()
+    await session.refresh(lead)
     return bundle
 
 
