@@ -1,6 +1,9 @@
 import pytest
 
+from scout_email.db.base import Base
+from scout_email.db.session import create_engine_and_sessionmaker
 from scout_email.jobs import runtime
+from scout_email.llm.persistence import LLMGenerationRecorder
 from scout_email.settings import Settings
 
 
@@ -35,6 +38,36 @@ def test_build_gateway_requires_gemini_key(tmp_path):
     )
     with pytest.raises(ValueError, match="Gemini API key"):
         runtime.build_gateway(configured)
+
+
+@pytest.mark.asyncio
+async def test_worker_handlers_attach_generation_recorder(tmp_path):
+    configured = Settings(
+        data_dir=tmp_path,
+        llm_provider="ollama",
+        llm_model="qwen3:8b",
+    )
+    gateway = runtime.build_gateway(configured)
+    assert gateway is not None
+
+    engine, factory = create_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{tmp_path / 'generation-recorder.db'}"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with factory() as session:
+        runtime.build_handlers(
+            session,
+            browser=object(),
+            gateway=gateway,
+            playbook=object(),
+            data_root=tmp_path,
+        )
+        assert isinstance(gateway.recorder, LLMGenerationRecorder)
+        assert gateway.recorder.session is session
+
+    await engine.dispose()
 
 
 def test_compose_passes_llm_configuration_to_worker():
