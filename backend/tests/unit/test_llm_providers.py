@@ -1,3 +1,5 @@
+import importlib
+import importlib.util
 import json
 
 import httpx
@@ -87,3 +89,66 @@ async def test_ollama_provider_uses_chat_schema_and_nonstreaming_response():
     assert result.provider == "ollama"
     assert result.model == "local-test"
     assert result.text == '{"summary":"local"}'
+
+
+@pytest.mark.asyncio
+async def test_openrouter_provider_uses_chat_completions_structured_output_contract():
+    module_name = "scout_email.llm.providers.openrouter"
+    assert importlib.util.find_spec(module_name) is not None
+    OpenRouterProvider = importlib.import_module(module_name).OpenRouterProvider
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer secret"
+        payload = json.loads(request.content)
+        assert payload == {
+            "model": "openrouter-test",
+            "messages": [
+                {"role": "system", "content": "system rules"},
+                {"role": "user", "content": "user context"},
+            ],
+            "temperature": 0,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "scout_email_response",
+                    "strict": True,
+                    "schema": _SCHEMA,
+                },
+            },
+        }
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "req-123"},
+            json={
+                "model": "openrouter-test",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": '{"summary":"routed"}',
+                        }
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://openrouter.ai",
+    ) as client:
+        provider = OpenRouterProvider(
+            api_key="secret",
+            model="openrouter-test",
+            client=client,
+        )
+        result = await provider.generate_json(
+            system="system rules",
+            user="user context",
+            schema=_SCHEMA,
+        )
+
+    assert result.provider == "openrouter"
+    assert result.model == "openrouter-test"
+    assert result.text == '{"summary":"routed"}'
+    assert result.request_id == "req-123"
