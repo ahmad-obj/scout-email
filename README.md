@@ -17,7 +17,25 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
    mkdir -p data n8n_data
    ```
 
-2. Keep `SCOUT_EMAIL_SEND_MODE=mock`. Configure an optional LLM provider in `.env` if required. Ollama defaults to `http://host.docker.internal:11434`; Gemini uses `SCOUT_EMAIL_GEMINI_API_KEY`.
+2. Keep `SCOUT_EMAIL_SEND_MODE=mock`. Configure one LLM provider only if you want the model-backed `RESEARCH`, `STRATEGY`, and `WRITER_CRITIC` stages to execute.
+
+   Gemini example:
+
+   ```dotenv
+   SCOUT_EMAIL_LLM_PROVIDER=gemini
+   SCOUT_EMAIL_LLM_MODEL=<supported-gemini-model>
+   SCOUT_EMAIL_GEMINI_API_KEY=<your-key>
+   ```
+
+   Ollama example:
+
+   ```dotenv
+   SCOUT_EMAIL_LLM_PROVIDER=ollama
+   SCOUT_EMAIL_LLM_MODEL=<installed-model>
+   SCOUT_EMAIL_OLLAMA_BASE_URL=http://host.docker.internal:11434
+   ```
+
+   `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL` are a required pair. Leave both blank to run the non-LLM stages only. Model-backed jobs then remain visibly retryable/failed rather than silently bypassing model work.
 
 3. Build and start the local stack:
 
@@ -26,11 +44,12 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
    docker compose ps
    ```
 
-   Operator-facing services are local-only:
+   The stack includes:
 
-   - API: `http://localhost:8000`
-   - n8n: `http://localhost:5678`
-   - browser-worker: internal Docker network only
+   - `outreach-api`: API and review UI at `http://localhost:8000`
+   - `outreach-worker`: background consumer for Maps, enrichment, evidence, research, strategy, and Writer/Critic jobs
+   - `browser-worker`: internal Playwright service for Maps and bounded page rendering
+   - `n8n`: orchestration and Gmail transport at `http://localhost:5678`
 
 4. Apply database migrations:
 
@@ -54,6 +73,8 @@ Local-first, evidence-backed outreach system for WEBERAISE. The backend owns bus
    ```bash
    curl -fsS -X POST http://localhost:8000/campaigns/1/scout
    ```
+
+   `outreach-worker` claims the queued backend jobs. n8n can enqueue and poll those same jobs but does not duplicate the backend's domain logic.
 
 8. Inspect jobs through their returned `status_url` values. Review generated drafts at `http://localhost:8000/review`. Human approval remains mandatory.
 
@@ -88,8 +109,10 @@ Switch back to `SCOUT_EMAIL_SEND_MODE=mock` whenever live transport is not expli
 - Approval is bound to the exact subject/body hash.
 - DNC and hard-bounce blocks cannot be overridden by campaign state.
 - Public contact details require source provenance; email addresses are never guessed.
+- Exact discovered website URLs are preserved for verification instead of assuming HTTPS/root paths.
 - n8n workflows remain orchestration/transport only and are imported disabled.
 - Browser navigation applies the backend/browser-worker public-network safety policy.
+- Production LLM generations record provider, model, prompt version, status, and repair metadata.
 
 ## Persistent data
 
@@ -109,17 +132,22 @@ sudo chown -R "$(id -u):$(id -g)" data n8n_data
 ```bash
 docker compose ps
 docker compose logs -f outreach-api
+docker compose logs -f outreach-worker
 docker compose logs -f browser-worker
 docker compose logs -f n8n
-docker compose restart outreach-api
+docker compose restart outreach-api outreach-worker
 docker compose down
 ```
 
 ## Troubleshooting
 
-**browser-worker unavailable** — Check `docker compose ps` and `docker compose logs browser-worker`. Confirm its health endpoint succeeds inside the Docker network and that `/data/browser-artifacts` is writable.
+**outreach-worker jobs stay PENDING** — Check `docker compose ps` and `docker compose logs outreach-worker`. The worker must share the same `/data` database volume as the API and must be able to reach `browser-worker:8010`.
+
+**browser-worker unavailable** — Check `docker compose ps` and `docker compose logs browser-worker`. Confirm its health endpoint succeeds inside the Docker network and that `/data` is writable.
 
 **Google Maps selector smoke failure** — Do not enable broad live traffic. Run only the opt-in bounded Maps smoke described by the test suite, with at most three results, and inspect selectors before changing extraction logic.
+
+**Model-backed jobs fail immediately** — Configure both `SCOUT_EMAIL_LLM_PROVIDER` and `SCOUT_EMAIL_LLM_MODEL`. For Gemini also configure `SCOUT_EMAIL_GEMINI_API_KEY`; for Ollama confirm the selected model exists and the worker can reach `SCOUT_EMAIL_OLLAMA_BASE_URL`.
 
 **Model rate limit/provider unavailable** — Check the configured provider and model, retry only through the bounded backend job policy, or use the alternate configured provider. Do not bypass structured-output validation.
 
