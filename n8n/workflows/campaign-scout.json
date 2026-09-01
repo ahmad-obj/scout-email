@@ -94,6 +94,35 @@
     },
     {
       "parameters": {
+        "fieldToSplitOut": "result.qualified_lead_ids",
+        "options": {
+          "destinationFieldName": "lead_id"
+        }
+      },
+      "id": "split-qualified-leads",
+      "name": "Split Qualified Leads",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1340, -240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/webhook/lead-research' }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({lead_id: $json.lead_id}) }}",
+        "options": {}
+      },
+      "id": "dispatch-lead-research",
+      "name": "Dispatch Lead Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, -240]
+    },
+    {
+      "parameters": {
         "conditions": {
           "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
           "conditions": [{"id": "retry", "leftValue": "={{ $json.state }}", "rightValue": "RETRY", "operator": {"type": "string", "operation": "equals"}}],
@@ -177,6 +206,8 @@
     "Wait Before Poll": {"main": [[{"node": "Poll Scout Job", "type": "main", "index": 0}]]},
     "Poll Scout Job": {"main": [[{"node": "State COMPLETE", "type": "main", "index": 0}]]},
     "State COMPLETE": {"main": [[{"node": "Scout COMPLETE", "type": "main", "index": 0}], [{"node": "State RETRY", "type": "main", "index": 0}]]},
+    "Scout COMPLETE": {"main": [[{"node": "Split Qualified Leads", "type": "main", "index": 0}]]},
+    "Split Qualified Leads": {"main": [[{"node": "Dispatch Lead Research", "type": "main", "index": 0}]]},
     "State RETRY": {"main": [[{"node": "Bounded RETRY Wait", "type": "main", "index": 0}], [{"node": "State FAILED", "type": "main", "index": 0}]]},
     "Bounded RETRY Wait": {"main": [[{"node": "Poll Scout Job", "type": "main", "index": 0}]]},
     "State FAILED": {"main": [[{"node": "Scout FAILED", "type": "main", "index": 0}], [{"node": "State SKIPPED", "type": "main", "index": 0}]]},
