@@ -211,7 +211,7 @@ async def test_worker_runtime_consumes_research_job(tmp_path):
         await session.flush()
         lead = Lead(
             campaign_id=campaign.id,
-            state="DISCOVERED",
+            state="RESEARCH_PENDING",
             name="Research Dental",
             normalized_name="research dental",
             category="Dentist",
