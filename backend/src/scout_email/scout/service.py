@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from scout_email.browser.client import BrowserWorkerClient
 from scout_email.campaigns.service import CampaignService
+from scout_email.common.enums import LeadState
 from scout_email.common.errors import InvalidStateTransitionError
 from scout_email.db.models import CampaignSearch, Lead
+from scout_email.db.repositories import LeadRepository
 from scout_email.jobs.schemas import JobReference
 from scout_email.jobs.service import JobService
 from scout_email.leads.service import LeadIngestService
@@ -55,21 +57,34 @@ class ScoutService:
             job_ids.append(job.id)
         return ScoutEnqueueResponse(campaign_id=campaign_id, jobs=jobs, job_ids=job_ids)
 
-    async def run_search(self, payload: ScoutSearchJobPayload) -> dict[str, int | str]:
+    async def run_search(self, payload: ScoutSearchJobPayload) -> dict[str, int | str | list[int]]:
         try:
             campaign, current = await self._campaign_and_count(payload.campaign_id)
         except RuntimeError as error:
             raise InvalidStateTransitionError(str(error)) from error
         target = campaign.target_leads or 1
         if current >= target:
-            return {"status": "target_reached", "created": 0, "seen": 0}
+            return {
+                "status": "target_reached",
+                "created": 0,
+                "seen": 0,
+                "qualified_lead_ids": [],
+                "low_priority_lead_ids": [],
+            }
         if self.browser is None:
             raise RuntimeError("ScoutService requires a browser client to execute search jobs")
+
+        campaign_view = await CampaignService(self.session).get(payload.campaign_id)
+        minimum_rating = campaign_view.qualification.minimum_rating
         remaining = min(payload.max_results, target - current)
         browser_leads = await self.browser.search_maps(payload.query, remaining)
         ingest = LeadIngestService(self.session)
+        lead_repo = LeadRepository(self.session)
         created = 0
         seen = 0
+        qualified_lead_ids: list[int] = []
+        low_priority_lead_ids: list[int] = []
+
         for browser_lead in browser_leads:
             if current + created >= target:
                 break
@@ -77,6 +92,45 @@ class ScoutService:
             result = await ingest.ingest(payload.campaign_id, raw, source)
             created += int(result.created)
             seen += 1
+
+            lead = await self.session.get(Lead, result.lead_id)
+            if lead is None:
+                raise RuntimeError("ingested lead was not persisted")
+            below_minimum_rating = (
+                minimum_rating is not None
+                and browser_lead.rating is not None
+                and browser_lead.rating < minimum_rating
+            )
+            desired_state = (
+                LeadState.LOW_PRIORITY if below_minimum_rating else LeadState.QUALIFIED
+            )
+            current_state = LeadState(lead.state)
+            if current_state == LeadState.DISCOVERED:
+                await lead_repo.transition(
+                    lead.id,
+                    desired_state,
+                    expected_state=LeadState.DISCOVERED,
+                )
+                current_state = desired_state
+            elif current_state == LeadState.LOW_PRIORITY and desired_state == LeadState.QUALIFIED:
+                await lead_repo.transition(
+                    lead.id,
+                    LeadState.QUALIFIED,
+                    expected_state=LeadState.LOW_PRIORITY,
+                )
+                current_state = LeadState.QUALIFIED
+
+            if current_state == LeadState.QUALIFIED and lead.id not in qualified_lead_ids:
+                qualified_lead_ids.append(lead.id)
+            elif current_state == LeadState.LOW_PRIORITY and lead.id not in low_priority_lead_ids:
+                low_priority_lead_ids.append(lead.id)
+
             await self.session.execute(sqlite_insert(LeadSourceQuery).values(campaign_id=payload.campaign_id, lead_id=result.lead_id, source="google_maps_browser", source_identity=source_identity(browser_lead), source_query=payload.query, source_url=browser_lead.maps_url).on_conflict_do_nothing(index_elements=["campaign_id", "source", "source_identity", "source_query"]))
         await self.session.commit()
-        return {"status": "complete", "created": created, "seen": seen}
+        return {
+            "status": "complete",
+            "created": created,
+            "seen": seen,
+            "qualified_lead_ids": qualified_lead_ids,
+            "low_priority_lead_ids": low_priority_lead_ids,
+        }
