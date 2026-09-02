@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import create_model
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +13,7 @@ from scout_email.llm.gateway import LLMGateway
 from scout_email.research.schemas import (
     BusinessModelSummary,
     BusinessSummary,
+    ContactReference,
     PresenceSummary,
     ResearchOutput,
 )
@@ -17,6 +21,25 @@ from scout_email.research.schemas import (
 
 class ResearchEvidenceError(ValueError):
     """Raised when generated research references data that was not persisted for the lead."""
+
+
+def _response_model_for_contacts(contact_ids: list[int]) -> type[ResearchOutput]:
+    """Constrain structured Research output to persisted verified contact IDs."""
+    if not contact_ids:
+        return ResearchOutput
+
+    allowed_ids = tuple(contact_ids)
+    allowed_contact_id = Literal[allowed_ids]
+    constrained_contact = create_model(
+        "VerifiedContactReference",
+        __base__=ContactReference,
+        contact_id=(allowed_contact_id, ...),
+    )
+    return create_model(
+        "ResearchOutputWithVerifiedContacts",
+        __base__=ResearchOutput,
+        contact=(constrained_contact | None, None),
+    )
 
 
 class ResearchService:
@@ -73,6 +96,7 @@ class ResearchService:
             )
             return output
 
+        contact_ids = [row.id for row in contacts]
         context = {
             "business": {
                 "name": lead.name,
@@ -101,7 +125,7 @@ class ResearchService:
                 for row in contacts
             ],
             "reference_constraints": {
-                "allowed_contact_ids": [row.id for row in contacts],
+                "allowed_contact_ids": contact_ids,
                 "contact_must_be_null": not contacts,
             },
         }
@@ -110,16 +134,16 @@ class ResearchService:
             generated = await self.gateway.generate(
                 task="researcher",
                 context=context,
-                response_model=ResearchOutput,
+                response_model=_response_model_for_contacts(contact_ids),
                 prompt_version=self.prompt_version,
             )
-            output = generated.output
+            output = ResearchOutput.model_validate(generated.output.model_dump())
             if not contacts and output.contact is not None:
                 output = output.model_copy(update={"contact": None})
             self._validate_references(
                 output,
                 evidence_ids={row.id for row in evidence},
-                contact_ids={row.id for row in contacts},
+                contact_ids=set(contact_ids),
             )
         except Exception:
             current = await self.session.get(Lead, lead_id)
