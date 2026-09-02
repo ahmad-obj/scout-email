@@ -10,7 +10,7 @@ from scout_email.common.enums import LeadState
 from scout_email.db.base import Base
 from scout_email.db.models import Campaign, Contact, Evidence, Lead, ResearchReport
 from scout_email.db.session import create_engine_and_sessionmaker
-from scout_email.llm.gateway import LLMGateway
+from scout_email.llm.gateway import LLMGateway, StructuredOutputError
 from scout_email.llm.schemas import ProviderResult
 from scout_email.research.service import ResearchEvidenceError, ResearchService
 
@@ -344,16 +344,18 @@ async def test_unknown_contact_reference_still_fails_closed_when_verified_contac
         payload["website_findings"] = []
         payload["technical_findings"] = []
         payload["contact"] = {"contact_id": 99999}
-        provider = FakeProvider([json.dumps(payload)])
+        invalid = json.dumps(payload)
+        provider = FakeProvider([invalid, invalid])
         gateway = LLMGateway(
             providers={"fake": provider},
             task_routes={"researcher": "fake"},
         )
         service = ResearchService(session, gateway=gateway)
 
-        with pytest.raises(ResearchEvidenceError, match="invalid contact ID"):
+        with pytest.raises(StructuredOutputError):
             await service.research(lead_id=lead.id)
 
+        assert len(provider.calls) == 2
         await session.refresh(lead)
         assert lead.state == LeadState.RESEARCH_PENDING.value
         assert await session.scalar(select(func.count()).select_from(ResearchReport)) == 0
