@@ -107,6 +107,47 @@ async def _lead_homepage(session, lead: Lead) -> str | None:
     return f"https://{lead.canonical_domain.strip().strip('/')}/"
 
 
+def _lead_homepage_candidates(preferred: str, canonical_domain: str | None) -> list[str]:
+    candidates: list[str] = []
+
+    def add(url: str) -> None:
+        if url not in candidates:
+            candidates.append(url)
+
+    add(preferred)
+    if not canonical_domain:
+        return candidates
+
+    domain = canonical_domain.strip().strip("/")
+    if not domain:
+        return candidates
+    if domain.casefold().startswith("www."):
+        domain = domain[4:]
+
+    for scheme in ("https", "http"):
+        add(f"{scheme}://{domain}/")
+        add(f"{scheme}://www.{domain}/")
+    return candidates
+
+
+async def _verify_lead_website(session, lead: Lead) -> WebsiteVerification:
+    preferred = await _lead_homepage(session, lead)
+    if preferred is None:
+        return await verify_website(None)
+
+    first_result: WebsiteVerification | None = None
+    for candidate in _lead_homepage_candidates(preferred, lead.canonical_domain):
+        result = await verify_website(candidate)
+        if first_result is None:
+            first_result = result
+        if result.state not in {WebsiteState.UNCERTAIN, WebsiteState.BROKEN}:
+            return result
+
+    if first_result is None:  # pragma: no cover - preferred always yields one candidate
+        return WebsiteVerification(state=WebsiteState.NO_WEBSITE)
+    return first_result
+
+
 def _website_verification(row: Website) -> WebsiteVerification:
     return WebsiteVerification(
         state=WebsiteState(row.state),
@@ -146,7 +187,23 @@ async def _mark_research_pending(session, lead: Lead) -> None:
     current = LeadState(lead.state)
     if current == LeadState.RESEARCH_PENDING:
         return
-    await LeadRepository(session).transition(lead.id, LeadState.RESEARCH_PENDING)
+
+    repository = LeadRepository(session)
+    if current == LeadState.DISCOVERED:
+        await repository.transition(
+            lead.id,
+            LeadState.QUALIFIED,
+            expected_state=LeadState.DISCOVERED,
+        )
+        await session.commit()
+        await session.refresh(lead)
+        current = LeadState.QUALIFIED
+
+    await repository.transition(
+        lead.id,
+        LeadState.RESEARCH_PENDING,
+        expected_state=current,
+    )
     await session.commit()
     await session.refresh(lead)
 
@@ -181,7 +238,7 @@ def build_handlers(
         lead = await session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f"lead {lead_id} does not exist")
-        verification = await verify_website(await _lead_homepage(session, lead))
+        verification = await _verify_lead_website(session, lead)
         await EnrichmentService(session).persist(lead_id, verification, [])
         return verification.model_dump(mode="json")
 
