@@ -172,3 +172,87 @@ async def test_build_bundle_persists_verified_facts_and_two_scoped_screenshots(t
         assert await session.scalar(select(func.count()).select_from(Evidence)) == evidence_count
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_website_verification_evidence_is_superseded_on_reverification(tmp_path):
+    engine, factory = create_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{tmp_path / 'evidence-reverification.db'}"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with factory() as session:
+        campaign = Campaign(
+            name="Reverification fixture",
+            status="ACTIVE",
+            max_per_day=10,
+            human_approval_required=True,
+        )
+        session.add(campaign)
+        await session.flush()
+        lead = Lead(
+            campaign_id=campaign.id,
+            state="QUALIFIED",
+            name="Legacy Business",
+            normalized_name="legacy business",
+            canonical_domain="example.com",
+        )
+        session.add(lead)
+        await session.flush()
+        website = Website(
+            lead_id=lead.id,
+            url="https://example.com/",
+            canonical_domain="example.com",
+            state="UNCERTAIN",
+            final_url="https://example.com/",
+        )
+        session.add(website)
+        stale = Evidence(
+            lead_id=lead.id,
+            kind="website_verification",
+            claim_class=ClaimClass.OBSERVED_FACT.value,
+            claim="Website state is UNCERTAIN",
+            source_type="website_verification",
+            source_url="https://example.com/",
+            confidence=1.0,
+        )
+        session.add(stale)
+        await session.commit()
+        stale_id = stale.id
+
+        website.state = "LIVE"
+        website.url = "http://www.example.com/"
+        website.final_url = "http://www.example.com/"
+        website.http_status = 200
+        await session.commit()
+
+        data_root = tmp_path / "data"
+        service = EvidenceService(
+            session,
+            data_root=data_root,
+            browser_client=FakeBrowserClient(data_root),
+        )
+        await service.build_bundle(
+            campaign_id=campaign.id,
+            lead_id=lead.id,
+            homepage_url="http://www.example.com/",
+        )
+
+        rows = list(
+            (
+                await session.scalars(
+                    select(Evidence).where(
+                        Evidence.lead_id == lead.id,
+                        Evidence.kind == "website_verification",
+                        Evidence.source_type == "website_verification",
+                    )
+                )
+            ).all()
+        )
+        assert len(rows) == 1
+        assert rows[0].id == stale_id
+        assert rows[0].claim == "Website state is LIVE"
+        assert rows[0].source_url == "http://www.example.com/"
+
+    await engine.dispose()
