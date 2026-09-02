@@ -221,6 +221,24 @@ class EvidenceService:
         artifact_path: str | None,
         confidence: float,
     ) -> Evidence:
+        if kind == "website_verification" and source_type == "website_verification":
+            row = await self.session.scalar(
+                select(Evidence)
+                .where(
+                    Evidence.lead_id == lead_id,
+                    Evidence.kind == kind,
+                    Evidence.claim_class == ClaimClass.OBSERVED_FACT.value,
+                    Evidence.source_type == source_type,
+                )
+                .order_by(Evidence.id)
+            )
+            if row is not None:
+                row.claim = claim
+                row.source_url = source_url
+                row.artifact_path = artifact_path
+                row.confidence = confidence
+                return row
+
         row = await self.session.scalar(
             select(Evidence).where(
                 Evidence.lead_id == lead_id,
