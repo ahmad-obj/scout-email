@@ -34,7 +34,15 @@ def test_contact_requires_supporting_evidence():
 def test_contact_requires_exactly_one_primary_angle_and_score():
     output = StrategyOutput(
         decision="CONTACT",
-        candidates=[],
+        candidates=[
+            {
+                "problem": "Booking CTA is difficult to notice on mobile.",
+                "angle": "Reduce mobile booking friction.",
+                "evidence_ids": [11],
+                "score": _score(),
+                "safe_to_reference": True,
+            }
+        ],
         persuasion_brief={
             "primary_angle": "booking friction",
             "do_not_use": ["SEO claims"],
