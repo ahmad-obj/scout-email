@@ -70,4 +70,15 @@ class StrategyOutput(StrictModel):
                 raise ValueError("CONTACT requires supporting evidence")
             if self.score_components is None:
                 raise ValueError("CONTACT requires score components")
+
+            safe_candidate_evidence = {
+                evidence_id
+                for candidate in self.candidates
+                if candidate.safe_to_reference
+                for evidence_id in candidate.evidence_ids
+            }
+            if not set(self.supporting_evidence_ids) <= safe_candidate_evidence:
+                raise ValueError(
+                    "CONTACT supporting evidence must come from safe-to-reference candidates"
+                )
         return self
