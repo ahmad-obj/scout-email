@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from scout_email.llm.providers.base import ProviderRequestError
@@ -50,27 +52,32 @@ class OpenRouterProvider:
         schema: dict,
     ) -> ProviderResult:
         try:
-            response = await self._get_client().post(
-                "/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": 0,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "scout_email_response",
-                            "strict": True,
-                            "schema": schema,
+            async with asyncio.timeout(self.timeout_seconds):
+                response = await self._get_client().post(
+                    "/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": 0,
+                        "response_format": {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "scout_email_response",
+                                "strict": True,
+                                "schema": schema,
+                            },
                         },
                     },
-                },
-            )
-            response.raise_for_status()
+                )
+                response.raise_for_status()
+        except TimeoutError as error:
+            raise ProviderRequestError(
+                f"OpenRouter request timed out after {self.timeout_seconds:g} seconds"
+            ) from error
         except httpx.HTTPError as error:
             raise ProviderRequestError(f"OpenRouter request failed: {error}") from error
 
