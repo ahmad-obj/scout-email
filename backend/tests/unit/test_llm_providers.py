@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import importlib.util
 import json
@@ -5,6 +6,7 @@ import json
 import httpx
 import pytest
 
+from scout_email.llm.providers.base import ProviderRequestError
 from scout_email.llm.providers.gemini import GeminiProvider
 from scout_email.llm.providers.ollama import OllamaProvider
 
@@ -152,3 +154,43 @@ async def test_openrouter_provider_uses_chat_completions_structured_output_contr
     assert result.model == "openrouter-test"
     assert result.text == '{"summary":"routed"}'
     assert result.request_id == "req-123"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_provider_enforces_total_request_deadline():
+    module_name = "scout_email.llm.providers.openrouter"
+    OpenRouterProvider = importlib.import_module(module_name).OpenRouterProvider
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(
+            200,
+            json={
+                "model": "openrouter-test",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": '{"summary":"too late"}',
+                        }
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://openrouter.ai",
+    ) as client:
+        provider = OpenRouterProvider(
+            api_key="secret",
+            model="openrouter-test",
+            client=client,
+            timeout_seconds=0.01,
+        )
+        with pytest.raises(ProviderRequestError, match="timed out"):
+            await provider.generate_json(
+                system="system rules",
+                user="user context",
+                schema=_SCHEMA,
+            )
