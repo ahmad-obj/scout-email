@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Protocol
 
@@ -9,6 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from scout_email.common.enums import ClaimClass
 from scout_email.db.models import Contact, CrawlPage, Evidence, Lead, Screenshot, Website
 from scout_email.evidence.schemas import EvidenceBundle, EvidenceRecord, ScreenshotRecord
+
+
+_TECHNICAL_EVIDENCE_KEYS = (
+    "uses_https",
+    "title_present",
+    "missing_meta_description",
+    "has_viewport",
+    "has_responsive_indicators",
+    "has_open_graph",
+    "has_structured_data",
+    "cta_count",
+    "image_count",
+    "declared_image_dimension_count",
+)
 
 
 class UnsafeArtifactPathError(ValueError):
@@ -53,6 +68,68 @@ def build_screenshot_path(
     if not candidate.is_relative_to(root):
         raise UnsafeArtifactPathError("artifact path escapes configured data root")
     return candidate
+
+
+def _bounded_text(value: str | None, *, limit: int) -> str:
+    if not value:
+        return ""
+    return " ".join(value.split())[:limit]
+
+
+def _signal_text(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _crawl_page_claim(page: CrawlPage) -> str:
+    status_text = str(page.http_status) if page.http_status is not None else "unknown"
+    parts = [f"Crawled page {page.url} returned HTTP {status_text}."]
+
+    title = _bounded_text(page.title, limit=200)
+    if title:
+        parts.append(f"Title: {title}.")
+
+    try:
+        extracted = json.loads(page.extracted_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        extracted = {}
+    if not isinstance(extracted, dict):
+        extracted = {}
+
+    technical = extracted.get("technical_signals")
+    if isinstance(technical, dict):
+        facts = [
+            f"{key}={_signal_text(technical[key])}"
+            for key in _TECHNICAL_EVIDENCE_KEYS
+            if key in technical and technical[key] is not None
+        ]
+        if facts:
+            parts.append("Deterministic technical facts: " + "; ".join(facts) + ".")
+
+    headings = extracted.get("headings")
+    if isinstance(headings, list):
+        heading_text = _bounded_text(
+            "; ".join(item for item in headings[:4] if isinstance(item, str)),
+            limit=240,
+        )
+        if heading_text:
+            parts.append(f"Headings: {heading_text}.")
+
+    calls_to_action = extracted.get("calls_to_action")
+    if isinstance(calls_to_action, list):
+        cta_text = _bounded_text(
+            "; ".join(item for item in calls_to_action[:5] if isinstance(item, str)),
+            limit=240,
+        )
+        if cta_text:
+            parts.append(f"Calls to action: {cta_text}.")
+
+    important_text = _bounded_text(page.important_text, limit=600)
+    if important_text:
+        parts.append(f"Page content excerpt: {important_text}")
+
+    return " ".join(parts)[:1_500]
 
 
 class EvidenceService:
@@ -129,12 +206,11 @@ class EvidenceService:
             )
 
         for page in pages:
-            status_text = str(page.http_status) if page.http_status is not None else "unknown"
             records.append(
                 await self._evidence(
                     lead_id=lead_id,
                     kind="crawl_page",
-                    claim=f"Crawled page {page.url} returned HTTP {status_text} and stored deterministic page facts",
+                    claim=_crawl_page_claim(page),
                     source_type="crawl_page",
                     source_url=page.url,
                     artifact_path=None,
@@ -221,17 +297,19 @@ class EvidenceService:
         artifact_path: str | None,
         confidence: float,
     ) -> Evidence:
-        if kind == "website_verification" and source_type == "website_verification":
-            row = await self.session.scalar(
-                select(Evidence)
-                .where(
-                    Evidence.lead_id == lead_id,
-                    Evidence.kind == kind,
-                    Evidence.claim_class == ClaimClass.OBSERVED_FACT.value,
-                    Evidence.source_type == source_type,
-                )
-                .order_by(Evidence.id)
+        mutable_slot = (
+            kind == "website_verification" and source_type == "website_verification"
+        ) or (kind == "crawl_page" and source_type == "crawl_page")
+        if mutable_slot:
+            statement = select(Evidence).where(
+                Evidence.lead_id == lead_id,
+                Evidence.kind == kind,
+                Evidence.claim_class == ClaimClass.OBSERVED_FACT.value,
+                Evidence.source_type == source_type,
             )
+            if kind == "crawl_page":
+                statement = statement.where(Evidence.source_url == source_url)
+            row = await self.session.scalar(statement.order_by(Evidence.id))
             if row is not None:
                 row.claim = claim
                 row.source_url = source_url

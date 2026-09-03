@@ -7,6 +7,31 @@ from typing import Any
 from scout_email.llm.context import sanitize_context
 
 
+_TASK_INSTRUCTIONS = {
+    "researcher": (
+        "Build a bounded business research dossier using only the supplied persisted evidence and verified contacts. "
+        "Every strength, website finding, and technical finding must cite supporting evidence IDs from the context. "
+        "Do not invent facts, metrics, business consequences, contacts, or evidence IDs. "
+        "Synthesize business model and presence only when the evidence supports them; absence of evidence is not a fact. "
+        "A COMPLETE outcome requires at least one meaningful evidence-linked finding. "
+        "If the supplied evidence cannot safely support a meaningful dossier, use RESEARCH_MORE, "
+        "INSUFFICIENT_EVIDENCE, or NO_CLEAR_OPPORTUNITY as appropriate. "
+        "Do not treat an HTTP 200 response by itself as a sales problem."
+    ),
+    "strategist": (
+        "Make an outreach decision from the supplied research dossier, persisted evidence, and verified contacts. "
+        "Do not enrich, rewrite, or complete the research dossier; strategy chooses whether and how to contact. "
+        "Choose CONTACT only when a verified contact exists and at least one specific, evidence-backed, "
+        "WEBERAISE-relevant opportunity is safe to reference. "
+        "For CONTACT, choose exactly one primary persuasion angle and use only existing evidence IDs from "
+        "safe-to-reference candidates as supporting evidence. "
+        "Use RESEARCH_MORE only when specific missing information blocks a safe outreach decision, not merely "
+        "because additional research is possible. LOW_PRIORITY and SKIP are valid outcomes. "
+        "Do not invent facts, metrics, private analytics, or unsupported business consequences."
+    ),
+}
+
+
 def build_system_prompt(*, task: str, prompt_version: str, repair: bool = False) -> str:
     if not task.strip():
         raise ValueError("task is required")
@@ -18,6 +43,9 @@ def build_system_prompt(*, task: str, prompt_version: str, repair: bool = False)
         "Return only JSON that validates against the supplied schema. "
         "Do not add markdown fences, commentary, or fields outside the schema."
     )
+    instructions = _TASK_INSTRUCTIONS.get(task.strip().casefold())
+    if instructions:
+        base = base + " " + instructions
     if repair:
         return (
             "Schema repair attempt. "

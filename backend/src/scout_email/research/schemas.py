@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 ResearchOutcome = Literal[
@@ -55,6 +55,14 @@ class ResearchOutput(StrictModel):
     contact: ContactReference | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     outcome: ResearchOutcome
+
+    @model_validator(mode="after")
+    def complete_requires_evidence_linked_finding(self) -> "ResearchOutput":
+        if self.outcome == "COMPLETE" and not (
+            self.strengths or self.website_findings or self.technical_findings
+        ):
+            raise ValueError("COMPLETE research requires at least one evidence-linked finding")
+        return self
 
     def referenced_evidence_ids(self) -> set[int]:
         return {
