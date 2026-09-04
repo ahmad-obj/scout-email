@@ -40,7 +40,7 @@ class OpportunityCandidate(StrictModel):
     angle: str = Field(min_length=1)
     evidence_ids: list[PositiveId] = Field(min_length=1)
     score: OpportunityScoreComponents
-    safe_to_reference: bool = False
+    safe_to_reference: bool
 
 
 class PersuasionBrief(StrictModel):
@@ -54,10 +54,10 @@ class PersuasionBrief(StrictModel):
 
 class StrategyOutput(StrictModel):
     decision: StrategyDecision
-    candidates: list[OpportunityCandidate] = Field(default_factory=list)
-    persuasion_brief: PersuasionBrief | None = None
-    supporting_evidence_ids: list[PositiveId] = Field(default_factory=list)
-    score_components: OpportunityScoreComponents | None = None
+    candidates: list[OpportunityCandidate]
+    persuasion_brief: PersuasionBrief | None
+    supporting_evidence_ids: list[PositiveId]
+    score_components: OpportunityScoreComponents | None
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
 
