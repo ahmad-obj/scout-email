@@ -172,7 +172,7 @@ def _writer_payload(evidence_id: int, variant: int) -> str:
     )
 
 
-def _rewrite_review() -> str:
+def _rewrite_review(evidence_id: int) -> str:
     return json.dumps(
         {
             "decision": "REWRITE",
@@ -185,6 +185,28 @@ def _rewrite_review() -> str:
                 "spamminess": 12,
             },
             "issues": ["Opening could fit unrelated businesses."],
+            "assertion_audits": [
+                {
+                    "body_assertion": "The booking action on your mobile homepage is easy to miss.",
+                    "assertion_type": "PROSPECT_FACT",
+                    "ledger_claim": "The booking action on the mobile homepage is easy to miss.",
+                    "evidence_ids": [evidence_id],
+                    "company_context_quote": None,
+                    "verdict": "ENTAILED",
+                    "explanation": "The wording preserves the observed booking-path issue.",
+                },
+                {
+                    "body_assertion": "That may add friction for visitors trying to book.",
+                    "assertion_type": "PROSPECT_INFERENCE",
+                    "ledger_claim": "That may add friction for visitors trying to book.",
+                    "evidence_ids": [evidence_id],
+                    "company_context_quote": None,
+                    "verdict": "REASONABLE_INFERENCE",
+                    "explanation": "The inference is cautious and tied to the observed booking path.",
+                },
+            ],
+            "coverage_complete": True,
+            "copy_abstractions": [],
         }
     )
 
@@ -206,7 +228,11 @@ async def test_quality_loop_caps_rewrites_at_two_and_surfaces_human_review(tmp_p
         critic_provider = FakeProvider(
             name="fake-critic",
             model="fake-critic-1",
-            payloads=[_rewrite_review(), _rewrite_review(), _rewrite_review()],
+            payloads=[
+                _rewrite_review(evidence.id),
+                _rewrite_review(evidence.id),
+                _rewrite_review(evidence.id),
+            ],
         )
         gateway = LLMGateway(
             providers={
