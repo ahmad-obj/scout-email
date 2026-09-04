@@ -38,7 +38,7 @@ class BannedPhraseError(WriterError):
 
 
 class WriterService:
-    PROMPT_VERSION = "writer:v2"
+    PROMPT_VERSION = "writer:v3"
 
     def __init__(
         self,
@@ -142,6 +142,7 @@ class WriterService:
                     self.playbook.cta_rules,
                 ],
                 "approved_examples": list(self.playbook.approved_examples),
+                "rejected_patterns": list(self.playbook.rejected_patterns),
                 "recent_corrections": [
                     {
                         "original_subject": row.original_subject,
