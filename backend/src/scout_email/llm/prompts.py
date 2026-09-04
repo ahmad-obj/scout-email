@@ -26,7 +26,14 @@ _TASK_INSTRUCTIONS = {
         "For CONTACT, choose exactly one primary persuasion angle and use only existing evidence IDs from "
         "safe-to-reference candidates as supporting evidence. "
         "Use RESEARCH_MORE only when specific missing information blocks a safe outreach decision, not merely "
-        "because additional research is possible. LOW_PRIORITY and SKIP are valid outcomes. "
+        "because additional research is possible. "
+        "A verified business contact is sufficient for safe outreach; exact decision-maker identity is not required. "
+        "Knowledge of an incumbent vendor or active web-development contract is not required. "
+        "Do not require proof that the prospect is actively buying or currently in-market. "
+        "Those missing sales-qualification details must not by themselves justify RESEARCH_MORE. "
+        "Use RESEARCH_MORE for missing information needed to substantiate a safe, evidence-backed outreach claim "
+        "or when no verified contact exists; do not use it merely to eliminate normal cold-outreach uncertainty. "
+        "LOW_PRIORITY and SKIP are valid outcomes when the opportunity itself is weak, irrelevant, or unsuitable. "
         "Do not invent facts, metrics, private analytics, or unsupported business consequences."
     ),
 }
