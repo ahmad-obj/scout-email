@@ -4,11 +4,20 @@ import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 import scout_email.writing.critic as critic_module
 from scout_email.common.enums import ApprovalState, ClaimClass, DraftReviewDecision, LeadState
 from scout_email.db.base import Base
-from scout_email.db.models import Campaign, Contact, EmailDraft, EmailDraftClaim, Evidence, Lead
+from scout_email.db.models import (
+    Campaign,
+    Contact,
+    EmailDraft,
+    EmailDraftClaim,
+    EmailReview,
+    Evidence,
+    Lead,
+)
 from scout_email.db.session import create_engine_and_sessionmaker
 from scout_email.llm.gateway import LLMGateway
 from scout_email.llm.prompts import build_system_prompt
@@ -26,28 +35,81 @@ class FakeProvider:
     name = "fake"
     model = "fake-critic-1"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        audit_mode: str = "clean",
+        coverage_complete: bool = True,
+        copy_abstractions: list[str] | None = None,
+    ) -> None:
         self.calls: list[dict] = []
+        self.audit_mode = audit_mode
+        self.coverage_complete = coverage_complete
+        self.copy_abstractions = copy_abstractions or []
 
     async def generate_json(self, *, system: str, user: str, schema: dict) -> ProviderResult:
         self.calls.append({"system": system, "user": user, "schema": schema})
+        payload = {
+            "decision": "APPROVE",
+            "scores": {
+                "specificity": 90,
+                "naturalness": 90,
+                "persuasiveness": 85,
+                "evidence_integrity": 100,
+                "genericness": 10,
+                "spamminess": 5,
+            },
+            "issues": [],
+        }
+
+        # Keep this fake compatible with both the pre-v4 schema and the
+        # future structured-audit schema so RED fails on behavior, not parsing.
+        if "assertion_audits" in schema.get("properties", {}):
+            context = json.loads(user)
+            ledger_claim = context["claims"][0]["text"]
+            evidence_id = context["claims"][0]["evidence_ids"][0]
+            audit = {
+                "body_assertion": ledger_claim,
+                "assertion_type": "PROSPECT_FACT",
+                "ledger_claim": ledger_claim,
+                "evidence_ids": [evidence_id],
+                "company_context_quote": None,
+                "verdict": "ENTAILED",
+                "explanation": "The wording preserves the supplied evidence meaning.",
+            }
+            if self.audit_mode == "semantic_expansion":
+                audit["body_assertion"] = (
+                    "The site is served over HTTP, so it falls below current web security standards."
+                )
+                audit["verdict"] = "SEMANTIC_EXPANSION"
+                audit["explanation"] = "The standards claim is stronger than the cited observation."
+            elif self.audit_mode == "uncatalogued":
+                audit["body_assertion"] = "Customers may avoid the site because it uses HTTP."
+                audit["ledger_claim"] = None
+                audit["verdict"] = "REASONABLE_INFERENCE"
+                audit["explanation"] = "This material prospect inference is absent from the ledger."
+            elif self.audit_mode == "unsupported_self_claim":
+                audit = {
+                    "body_assertion": "WEBERAISE specializes in large product databases.",
+                    "assertion_type": "WEBERAISE_SELF_CLAIM",
+                    "ledger_claim": None,
+                    "evidence_ids": [],
+                    "company_context_quote": "specializes in large product databases",
+                    "verdict": "ENTAILED",
+                    "explanation": "Claimed as supported by company context.",
+                }
+            payload.update(
+                {
+                    "assertion_audits": [audit],
+                    "coverage_complete": self.coverage_complete,
+                    "copy_abstractions": self.copy_abstractions,
+                }
+            )
+
         return ProviderResult(
             provider=self.name,
             model=self.model,
-            text=json.dumps(
-                {
-                    "decision": "APPROVE",
-                    "scores": {
-                        "specificity": 90,
-                        "naturalness": 90,
-                        "persuasiveness": 85,
-                        "evidence_integrity": 100,
-                        "genericness": 10,
-                        "spamminess": 5,
-                    },
-                    "issues": [],
-                }
-            ),
+            text=json.dumps(payload),
         )
 
 
@@ -124,7 +186,7 @@ async def _seed_reviewable_draft(session, *, body: str):
 
 def test_writer_and_critic_prompts_enforce_v3_semantic_fidelity_policy():
     writer = build_system_prompt(task="writer", prompt_version="writer:v3")
-    critic = build_system_prompt(task="critic", prompt_version="critic:v3")
+    critic = build_system_prompt(task="critic", prompt_version="critic:v4")
 
     assert "every material prospect-specific factual or inferential statement" in writer.casefold()
     assert "semantically entailed" in writer.casefold()
@@ -136,14 +198,25 @@ def test_writer_and_critic_prompts_enforce_v3_semantic_fidelity_policy():
 
     assert "audit the complete subject and body" in critic.casefold()
     assert "claim ledger" in critic.casefold()
-    assert "semantic" in critic.casefold()
-    assert "stronger" in critic.casefold()
-    assert "audience" in critic.casefold()
+    assert "structured assertion audit" in critic.casefold()
+    assert "semantic expansion" in critic.casefold()
+    assert "uncatalogued" in critic.casefold()
     assert "company context" in critic.casefold()
     assert "generic" in critic.casefold()
 
     assert WriterService.PROMPT_VERSION == "writer:v3"
-    assert critic_module._PROMPT_VERSION == "critic:v3"
+    assert critic_module._PROMPT_VERSION == "critic:v4"
+
+
+def test_critic_model_schema_requires_structured_assertion_audit():
+    schema = critic_module.CriticModelOutput.model_json_schema()
+    required = set(schema.get("required", []))
+
+    assert {"assertion_audits", "coverage_complete", "copy_abstractions"} <= required
+
+
+def test_email_review_model_persists_structured_audit():
+    assert hasattr(EmailReview, "audit_json")
 
 
 def test_original_live_smoke_draft_is_not_allowed_to_pass_hard_language_rules():
@@ -178,7 +251,7 @@ Would you be open to seeing a brief example of how we could modernize the mobile
 
 
 @pytest.mark.asyncio
-async def test_critic_receives_v3_semantic_fidelity_and_playbook_rules(tmp_path):
+async def test_critic_receives_v4_structured_audit_and_playbook_rules(tmp_path):
     engine, factory = await _database(tmp_path)
     async with factory() as session:
         draft = await _seed_reviewable_draft(
@@ -202,6 +275,7 @@ async def test_critic_receives_v3_semantic_fidelity_and_playbook_rules(tmp_path)
         assert rules["forbid_unsupported_audience_personas"] is True
         assert rules["require_weberaise_claims_from_company_context"] is True
         assert rules["prefer_plain_language_over_agency_abstractions"] is True
+        assert rules["require_structured_assertion_audit"] is True
         assert rules["writing_rules"] == playbook.writing_rules
         assert rules["company_context"] == playbook.company_context
         assert rules["cta_rules"] == playbook.cta_rules
@@ -259,5 +333,146 @@ async def test_critic_downgrades_approval_for_playbook_rejected_pattern(tmp_path
 
         assert review.decision == DraftReviewDecision.REWRITE
         assert any(issue.startswith("rejected_pattern:") for issue in review.issues)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structured_audit_semantic_expansion_cannot_approve(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "The site is served over HTTP, so it falls below current web security standards. "
+                "Would it be useful if I sent one focused idea?"
+            ),
+        )
+        provider = FakeProvider(audit_mode="semantic_expansion")
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert any(issue.startswith("semantic_expansion:") for issue in review.issues)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structured_audit_uncatalogued_material_assertion_cannot_approve(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "The site is served over HTTP rather than HTTPS. "
+                "Customers may avoid the site because it uses HTTP."
+            ),
+        )
+        provider = FakeProvider(audit_mode="uncatalogued")
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert "uncatalogued_material_assertion" in review.issues
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structured_audit_weberaise_quote_must_exist_in_company_context(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "I noticed the site is served over HTTP rather than HTTPS. "
+                "WEBERAISE specializes in large product databases."
+            ),
+        )
+        provider = FakeProvider(audit_mode="unsupported_self_claim")
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert "unsupported_weberaise_claim" in review.issues
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structured_audit_incomplete_coverage_or_abstraction_cannot_approve(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "I noticed the site is served over HTTP rather than HTTPS. "
+                "We could modernize your site's foundation."
+            ),
+        )
+        provider = FakeProvider(
+            coverage_complete=False,
+            copy_abstractions=["modernize your site's foundation"],
+        )
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert "incomplete_body_assertion_audit" in review.issues
+        assert any(issue.startswith("agency_abstraction:") for issue in review.issues)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structured_audit_is_persisted_with_effective_review(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "I noticed the site is served over HTTP rather than HTTPS. "
+                "Would it be useful if I sent one focused idea?"
+            ),
+        )
+        provider = FakeProvider()
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+        row = await session.scalar(
+            select(EmailReview).where(EmailReview.draft_id == draft.id).order_by(EmailReview.id.desc())
+        )
+
+        assert row is not None
+        persisted = json.loads(row.audit_json)
+        assert persisted["coverage_complete"] is True
+        assert persisted["assertion_audits"]
+        assert persisted["model_decision"] == "APPROVE"
+        assert persisted["effective_decision"] == review.decision.value
 
     await engine.dispose()
