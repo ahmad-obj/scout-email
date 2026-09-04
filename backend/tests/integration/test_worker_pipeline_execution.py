@@ -145,6 +145,8 @@ class FixtureGateway:
                 "strategy_label": "CONVERSION_PROBLEM",
             }
         elif task == "critic":
+            ledger_claim = context["claims"][0]["text"]
+            evidence_id = int(context["claims"][0]["evidence_ids"][0])
             payload = {
                 "decision": "APPROVE",
                 "scores": {
@@ -156,6 +158,19 @@ class FixtureGateway:
                     "spamminess": 5,
                 },
                 "issues": [],
+                "assertion_audits": [
+                    {
+                        "body_assertion": ledger_claim,
+                        "assertion_type": "PROSPECT_FACT",
+                        "ledger_claim": ledger_claim,
+                        "evidence_ids": [evidence_id],
+                        "company_context_quote": None,
+                        "verdict": "ENTAILED",
+                        "explanation": "The fixture preserves the persisted observation.",
+                    }
+                ],
+                "coverage_complete": True,
+                "copy_abstractions": [],
             }
         else:  # pragma: no cover
             raise AssertionError(f"unexpected task: {task}")
