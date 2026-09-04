@@ -18,6 +18,7 @@ _WRITER_KEYS = (
     "weberaise_context",
     "writing_rules",
     "approved_examples",
+    "rejected_patterns",
     "recent_corrections",
     "recent_sent_structures",
     "critic_feedback",
