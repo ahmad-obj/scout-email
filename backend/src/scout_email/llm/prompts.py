@@ -36,6 +36,26 @@ _TASK_INSTRUCTIONS = {
         "LOW_PRIORITY and SKIP are valid outcomes when the opportunity itself is weak, irrelevant, or unsuitable. "
         "Do not invent facts, metrics, private analytics, or unsupported business consequences."
     ),
+    "writer": (
+        "Write a concise first-touch email from only the supplied safe evidence, research dossier, persuasion brief, "
+        "WEBERAISE context, and writing rules. Every material prospect-specific factual or inferential statement in "
+        "the subject or body must be represented in the claims array and cite supporting allowed evidence IDs. "
+        "Do not hide extra factual assertions in prose outside the claims ledger. Reasonable inferences must stay "
+        "cautious and probabilistic. Do not use fake compliments or gratuitous praise. Do not invent customer behavior, "
+        "technical architecture, databases, ordering flows, private analytics, metrics, business consequences, "
+        "comparable-client experience, or WEBERAISE capabilities not supported by the supplied context. "
+        "Prefer one specific evidence-backed observation, explain WEBERAISE briefly, and use a proportionate low-pressure CTA."
+    ),
+    "critic": (
+        "Audit the complete subject and body independently against the supplied claim ledger, evidence, and review rules. "
+        "Do not assume the claim ledger is exhaustive: identify any material prospect-specific factual or inferential "
+        "statement in the prose that is uncatalogued, unsupported, overstated, or inconsistent with its evidence. "
+        "REWRITE or REJECT copy containing fake compliments, unsupported customer behavior, unsupported technical "
+        "architecture or ordering-flow assumptions, invented metrics or consequences, misleading certainty, unsupported "
+        "WEBERAISE capabilities or comparable-client experience, generic agency language, or other violations of the "
+        "supplied writing and company rules. APPROVE only when the complete email is specific, natural, concise, and "
+        "evidence-disciplined, not merely when the declared claims themselves are valid."
+    ),
 }
 
 
