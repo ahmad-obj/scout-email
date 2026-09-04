@@ -38,7 +38,7 @@ class BannedPhraseError(WriterError):
 
 
 class WriterService:
-    PROMPT_VERSION = "writer:v1"
+    PROMPT_VERSION = "writer:v2"
 
     def __init__(
         self,
