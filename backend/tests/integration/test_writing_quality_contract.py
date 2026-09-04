@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import scout_email.writing.critic as critic_module
-from scout_email.common.enums import ApprovalState, ClaimClass, LeadState
+from scout_email.common.enums import ApprovalState, ClaimClass, DraftReviewDecision, LeadState
 from scout_email.db.base import Base
 from scout_email.db.models import Campaign, Contact, EmailDraft, EmailDraftClaim, Evidence, Lead
 from scout_email.db.session import create_engine_and_sessionmaker
@@ -60,27 +60,93 @@ async def _database(tmp_path):
     return engine, factory
 
 
-def test_writer_and_critic_prompts_enforce_claim_ledger_quality_policy():
-    writer = build_system_prompt(task="writer", prompt_version="writer:v2")
-    critic = build_system_prompt(task="critic", prompt_version="critic:v2")
+async def _seed_reviewable_draft(session, *, body: str):
+    campaign = Campaign(
+        name="Quality Contract",
+        status="ACTIVE",
+        max_per_day=10,
+        human_approval_required=True,
+    )
+    session.add(campaign)
+    await session.flush()
+    lead = Lead(
+        campaign_id=campaign.id,
+        state=LeadState.CONTACTABLE.value,
+        name="Acme Dental",
+        normalized_name="acme dental",
+        category="Dentist",
+        city="Lahore",
+        canonical_domain="example.com",
+    )
+    session.add(lead)
+    await session.flush()
+    contact = Contact(
+        lead_id=lead.id,
+        email="hello@example.com",
+        normalized_email="hello@example.com",
+        contact_type="business",
+        state="VERIFIED",
+        source_url="https://example.com/contact",
+        confidence=1.0,
+    )
+    evidence = Evidence(
+        lead_id=lead.id,
+        kind="crawl_page",
+        claim_class=ClaimClass.OBSERVED_FACT.value,
+        claim="The site is served over HTTP rather than HTTPS.",
+        source_type="crawl_page",
+        source_url="http://example.com/",
+        confidence=1.0,
+    )
+    session.add_all([contact, evidence])
+    await session.flush()
+    draft = EmailDraft(
+        lead_id=lead.id,
+        subject="Website security thought",
+        body=body,
+        writer_prompt_version="writer:v3",
+        model_id="fake-writer-1",
+        approval_state=ApprovalState.PENDING.value,
+    )
+    session.add(draft)
+    await session.flush()
+    session.add(
+        EmailDraftClaim(
+            draft_id=draft.id,
+            claim_text="The site is served over HTTP rather than HTTPS.",
+            claim_class=ClaimClass.OBSERVED_FACT.value,
+            evidence_ids_json=json.dumps([evidence.id]),
+        )
+    )
+    await session.commit()
+    return draft
+
+
+def test_writer_and_critic_prompts_enforce_v3_semantic_fidelity_policy():
+    writer = build_system_prompt(task="writer", prompt_version="writer:v3")
+    critic = build_system_prompt(task="critic", prompt_version="critic:v3")
 
     assert "every material prospect-specific factual or inferential statement" in writer.casefold()
-    assert "claims" in writer.casefold()
-    assert "fake compliments" in writer.casefold()
-    assert "customer behavior" in writer.casefold()
-    assert "technical architecture" in writer.casefold()
+    assert "semantically entailed" in writer.casefold()
+    assert "stock numbers" in writer.casefold()
+    assert "products" in writer.casefold()
+    assert "audience" in writer.casefold()
+    assert "company context" in writer.casefold()
+    assert "plain" in writer.casefold()
 
     assert "audit the complete subject and body" in critic.casefold()
     assert "claim ledger" in critic.casefold()
-    assert "uncatalogued" in critic.casefold()
-    assert "fake compliments" in critic.casefold()
-    assert "unsupported customer behavior" in critic.casefold()
+    assert "semantic" in critic.casefold()
+    assert "stronger" in critic.casefold()
+    assert "audience" in critic.casefold()
+    assert "company context" in critic.casefold()
+    assert "generic" in critic.casefold()
 
-    assert WriterService.PROMPT_VERSION == "writer:v2"
-    assert critic_module._PROMPT_VERSION == "critic:v2"
+    assert WriterService.PROMPT_VERSION == "writer:v3"
+    assert critic_module._PROMPT_VERSION == "critic:v3"
 
 
-def test_live_smoke_draft_is_not_allowed_to_pass_hard_language_rules():
+def test_original_live_smoke_draft_is_not_allowed_to_pass_hard_language_rules():
     body = """I’ve been looking through the Pacific Northwest X-Ray catalog and was impressed by the sheer depth of your inventory. With over 6,800 active stock numbers spanning podiatric, veterinary, and clinical imaging, it’s clearly a vital resource for your customers.
 
 While the depth of information is excellent, I noticed that the current structure—which is a great foundation—is not yet optimized for modern security standards like HTTPS or for the mobile browsing habits of busy medical professionals on the go.
@@ -112,68 +178,16 @@ Would you be open to seeing a brief example of how we could modernize the mobile
 
 
 @pytest.mark.asyncio
-async def test_critic_receives_weberaise_rules_and_explicit_body_coverage_policy(tmp_path):
+async def test_critic_receives_v3_semantic_fidelity_and_playbook_rules(tmp_path):
     engine, factory = await _database(tmp_path)
     async with factory() as session:
-        campaign = Campaign(
-            name="Quality Contract",
-            status="ACTIVE",
-            max_per_day=10,
-            human_approval_required=True,
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "I noticed the site is served over HTTP rather than HTTPS. "
+                "Would it be useful if I sent one focused idea?"
+            ),
         )
-        session.add(campaign)
-        await session.flush()
-        lead = Lead(
-            campaign_id=campaign.id,
-            state=LeadState.CONTACTABLE.value,
-            name="Acme Dental",
-            normalized_name="acme dental",
-            category="Dentist",
-            city="Lahore",
-            canonical_domain="example.com",
-        )
-        session.add(lead)
-        await session.flush()
-        contact = Contact(
-            lead_id=lead.id,
-            email="hello@example.com",
-            normalized_email="hello@example.com",
-            contact_type="business",
-            state="VERIFIED",
-            source_url="https://example.com/contact",
-            confidence=1.0,
-        )
-        evidence = Evidence(
-            lead_id=lead.id,
-            kind="screenshot",
-            claim_class=ClaimClass.OBSERVED_FACT.value,
-            claim="The mobile booking CTA is difficult to spot.",
-            source_type="screenshot",
-            source_url="https://example.com/",
-            confidence=0.95,
-        )
-        session.add_all([contact, evidence])
-        await session.flush()
-        draft = EmailDraft(
-            lead_id=lead.id,
-            subject="Mobile booking thought",
-            body="I noticed the mobile booking CTA is difficult to spot. Would it be useful if I sent one focused idea?",
-            writer_prompt_version="writer:v2",
-            model_id="fake-writer-1",
-            approval_state=ApprovalState.PENDING.value,
-        )
-        session.add(draft)
-        await session.flush()
-        session.add(
-            EmailDraftClaim(
-                draft_id=draft.id,
-                claim_text="The mobile booking CTA is difficult to spot.",
-                claim_class=ClaimClass.OBSERVED_FACT.value,
-                evidence_ids_json=json.dumps([evidence.id]),
-            )
-        )
-        await session.commit()
-
         provider = FakeProvider()
         gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
         playbook = load_playbook(PLAYBOOK_DIR)
@@ -184,8 +198,66 @@ async def test_critic_receives_weberaise_rules_and_explicit_body_coverage_policy
         payload = json.loads(provider.calls[0]["user"])
         rules = payload["review_rules"]
         assert rules["audit_complete_body_against_claim_ledger"] is True
+        assert rules["require_claim_evidence_entailment"] is True
+        assert rules["forbid_unsupported_audience_personas"] is True
+        assert rules["require_weberaise_claims_from_company_context"] is True
+        assert rules["prefer_plain_language_over_agency_abstractions"] is True
         assert rules["writing_rules"] == playbook.writing_rules
         assert rules["company_context"] == playbook.company_context
         assert rules["cta_rules"] == playbook.cta_rules
+        assert rules["rejected_patterns"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_critic_downgrades_approval_for_unsupported_audience_persona(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "The site is served over HTTP rather than HTTPS, so security-conscious customers "
+                "may experience friction. Would it be useful if I sent one focused idea?"
+            ),
+        )
+        provider = FakeProvider()
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert "unsupported_audience_persona" in review.issues
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_critic_downgrades_approval_for_playbook_rejected_pattern(tmp_path):
+    engine, factory = await _database(tmp_path)
+    async with factory() as session:
+        draft = await _seed_reviewable_draft(
+            session,
+            body=(
+                "I noticed the site is served over HTTP rather than HTTPS. "
+                "WEBERAISE can elevate your online presence. "
+                "Would it be useful if I sent one focused idea?"
+            ),
+        )
+        provider = FakeProvider()
+        gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
+
+        review = await CriticService(
+            session,
+            gateway=gateway,
+            playbook=load_playbook(PLAYBOOK_DIR),
+        ).review(draft_id=draft.id)
+
+        assert review.decision == DraftReviewDecision.REWRITE
+        assert any(issue.startswith("rejected_pattern:") for issue in review.issues)
 
     await engine.dispose()
