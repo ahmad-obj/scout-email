@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -20,11 +21,12 @@ from scout_email.db.models import (
     OutboundMessage,
 )
 from scout_email.llm.gateway import LLMGateway
+from scout_email.writing.models import EmailReviewAudit
 from scout_email.writing.playbook import WritingPlaybook
 from scout_email.writing.schemas import DraftClaim
 
 
-_PROMPT_VERSION = "critic:v3"
+_PROMPT_VERSION = "critic:v4"
 _QUANTIFIED_LOSS = re.compile(
     r"\b(?:los(?:e|ing)|cost(?:s|ing)?|miss(?:ing)?|leav(?:e|ing))\b[^.!?\n]{0,80}\b\d+(?:\.\d+)?\s*%",
     re.IGNORECASE,
@@ -47,6 +49,18 @@ _UNSUPPORTED_AUDIENCE_PERSONA = re.compile(
     re.IGNORECASE,
 )
 
+AssertionType = Literal[
+    "PROSPECT_FACT",
+    "PROSPECT_INFERENCE",
+    "WEBERAISE_SELF_CLAIM",
+]
+AssertionVerdict = Literal[
+    "ENTAILED",
+    "REASONABLE_INFERENCE",
+    "SEMANTIC_EXPANSION",
+    "UNSUPPORTED",
+]
+
 
 class CriticScores(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -59,17 +73,35 @@ class CriticScores(BaseModel):
     spamminess: int = Field(ge=0, le=100)
 
 
+class AssertionAudit(BaseModel):
+    """One model-audited material assertion from the rendered email."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    body_assertion: str = Field(min_length=1)
+    assertion_type: AssertionType
+    ledger_claim: str | None
+    evidence_ids: list[int]
+    company_context_quote: str | None
+    verdict: AssertionVerdict
+    explanation: str = Field(min_length=1)
+
+
 class CriticModelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: DraftReviewDecision
     scores: CriticScores
     issues: list[str] = Field(default_factory=list)
+    assertion_audits: list[AssertionAudit]
+    coverage_complete: bool
+    copy_abstractions: list[str]
 
 
 class CriticReviewResult(CriticModelOutput):
     prompt_version: str
     model_id: str | None = None
+    model_decision: DraftReviewDecision | None = None
 
 
 def scan_hard_rejection_issues(
@@ -111,6 +143,10 @@ def scan_quality_issues(
             issues.append(f"rejected_pattern:{pattern.strip()}")
 
     return list(dict.fromkeys(issues))
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 class CriticService:
@@ -161,15 +197,17 @@ class CriticService:
                     spamminess=100,
                 ),
                 issues=hard_issues,
+                assertion_audits=[],
+                coverage_complete=False,
+                copy_abstractions=[],
                 prompt_version=_PROMPT_VERSION,
                 model_id=None,
+                model_decision=None,
             )
             await self._persist(draft_id=draft.id, result=result)
             return result
 
-        rejected_patterns = (
-            list(self.playbook.rejected_patterns) if self.playbook else []
-        )
+        rejected_patterns = list(self.playbook.rejected_patterns) if self.playbook else []
         quality_issues = scan_quality_issues(
             subject=draft.subject,
             body=draft.body,
@@ -207,6 +245,7 @@ class CriticService:
                     "forbid_unsupported_audience_personas": True,
                     "require_weberaise_claims_from_company_context": True,
                     "prefer_plain_language_over_agency_abstractions": True,
+                    "require_structured_assertion_audit": True,
                     "writing_rules": self.playbook.writing_rules if self.playbook else "",
                     "company_context": self.playbook.company_context if self.playbook else "",
                     "cta_rules": self.playbook.cta_rules if self.playbook else "",
@@ -217,19 +256,105 @@ class CriticService:
             prompt_version=_PROMPT_VERSION,
         )
 
+        structured_issues = self._structured_audit_issues(
+            output=generation.output,
+            claim_rows=claim_rows,
+            evidence_context=evidence_context,
+            company_context=self.playbook.company_context if self.playbook else "",
+        )
+        all_quality_issues = list(
+            dict.fromkeys([*quality_issues, *structured_issues])
+        )
+
         decision = generation.output.decision
-        if quality_issues and decision == DraftReviewDecision.APPROVE:
+        if all_quality_issues and decision == DraftReviewDecision.APPROVE:
             decision = DraftReviewDecision.REWRITE
-        issues = list(dict.fromkeys([*generation.output.issues, *quality_issues]))
+        issues = list(
+            dict.fromkeys([*generation.output.issues, *all_quality_issues])
+        )
         result = CriticReviewResult(
             decision=decision,
             scores=generation.output.scores,
             issues=issues,
+            assertion_audits=generation.output.assertion_audits,
+            coverage_complete=generation.output.coverage_complete,
+            copy_abstractions=generation.output.copy_abstractions,
             prompt_version=_PROMPT_VERSION,
             model_id=generation.metadata.model,
+            model_decision=generation.output.decision,
         )
         await self._persist(draft_id=draft.id, result=result)
         return result
+
+    def _structured_audit_issues(
+        self,
+        *,
+        output: CriticModelOutput,
+        claim_rows: Sequence[EmailDraftClaim],
+        evidence_context: Sequence[Mapping[str, object]],
+        company_context: str,
+    ) -> list[str]:
+        issues: list[str] = []
+        if not output.coverage_complete:
+            issues.append("incomplete_body_assertion_audit")
+
+        ledger_evidence: dict[str, set[int]] = {}
+        for claim in claim_rows:
+            ledger_evidence[_normalize_text(claim.claim_text)] = set(
+                self._parse_evidence_ids(claim.evidence_ids_json)
+            )
+        known_evidence_ids = {
+            int(item["id"])
+            for item in evidence_context
+            if isinstance(item.get("id"), int)
+        }
+        audited_ledger_claims: set[str] = set()
+        normalized_company_context = _normalize_text(company_context)
+
+        for audit in output.assertion_audits:
+            preview = _normalize_text(audit.body_assertion)[:120]
+            if audit.verdict == "SEMANTIC_EXPANSION":
+                issues.append(f"semantic_expansion:{preview}")
+            elif audit.verdict == "UNSUPPORTED":
+                issues.append(f"unsupported_assertion:{preview}")
+
+            if audit.assertion_type in {"PROSPECT_FACT", "PROSPECT_INFERENCE"}:
+                if audit.ledger_claim is None:
+                    issues.append("uncatalogued_material_assertion")
+                    continue
+
+                ledger_key = _normalize_text(audit.ledger_claim)
+                expected_evidence = ledger_evidence.get(ledger_key)
+                if expected_evidence is None:
+                    issues.append("unknown_claim_ledger_reference")
+                    continue
+
+                audited_ledger_claims.add(ledger_key)
+                audit_evidence = set(audit.evidence_ids)
+                if not audit_evidence or not audit_evidence.issubset(expected_evidence):
+                    issues.append("audit_evidence_not_in_claim_ledger")
+                if not audit_evidence.issubset(known_evidence_ids):
+                    issues.append("unknown_evidence")
+
+            elif audit.assertion_type == "WEBERAISE_SELF_CLAIM":
+                quote = audit.company_context_quote
+                if (
+                    quote is None
+                    or not quote.strip()
+                    or _normalize_text(quote) not in normalized_company_context
+                ):
+                    issues.append("unsupported_weberaise_claim")
+
+        missing_ledger_audits = set(ledger_evidence) - audited_ledger_claims
+        if missing_ledger_audits:
+            issues.append("incomplete_claim_audit")
+
+        for abstraction in output.copy_abstractions:
+            normalized = abstraction.strip()
+            if normalized:
+                issues.append(f"agency_abstraction:{normalized}")
+
+        return list(dict.fromkeys(issues))
 
     async def _evidence_issues(
         self,
@@ -342,14 +467,33 @@ class CriticService:
         ]
 
     async def _persist(self, *, draft_id: int, result: CriticReviewResult) -> None:
+        review = EmailReview(
+            draft_id=draft_id,
+            decision=result.decision.value,
+            scores_json=result.scores.model_dump_json(),
+            issues_json=json.dumps(result.issues),
+            prompt_version=result.prompt_version,
+            model_id=result.model_id,
+        )
+        self.session.add(review)
+        await self.session.flush()
+
+        audit_payload = {
+            "model_decision": (
+                result.model_decision.value if result.model_decision is not None else None
+            ),
+            "effective_decision": result.decision.value,
+            "coverage_complete": result.coverage_complete,
+            "assertion_audits": [
+                audit.model_dump(mode="json") for audit in result.assertion_audits
+            ],
+            "copy_abstractions": result.copy_abstractions,
+        }
         self.session.add(
-            EmailReview(
+            EmailReviewAudit(
+                review_id=review.id,
                 draft_id=draft_id,
-                decision=result.decision.value,
-                scores_json=result.scores.model_dump_json(),
-                issues_json=json.dumps(result.issues),
-                prompt_version=result.prompt_version,
-                model_id=result.model_id,
+                audit_json=json.dumps(audit_payload, ensure_ascii=False),
             )
         )
         await self.session.commit()
