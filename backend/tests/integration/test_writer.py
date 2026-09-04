@@ -175,7 +175,7 @@ async def test_writer_persists_evidence_linked_draft_and_generation_metadata(tmp
             playbook=playbook,
         ).write(lead_id=lead.id)
 
-        assert output.prompt_version == "writer:v1"
+        assert output.prompt_version == "writer:v2"
         assert output.playbook_hash == playbook.version_hash
         assert output.strategy_label == "CONVERSION_PROBLEM"
         assert len(provider.calls) == 1
@@ -184,7 +184,7 @@ async def test_writer_persists_evidence_linked_draft_and_generation_metadata(tmp
         draft = await session.scalar(select(EmailDraft).where(EmailDraft.lead_id == lead.id))
         assert draft is not None
         assert draft.strategy_id == strategy.id
-        assert draft.writer_prompt_version == "writer:v1"
+        assert draft.writer_prompt_version == "writer:v2"
         assert draft.model_id == "fake-writer-1"
         assert await session.scalar(select(func.count()).select_from(EmailDraftClaim)) == 2
         metadata = await session.scalar(
