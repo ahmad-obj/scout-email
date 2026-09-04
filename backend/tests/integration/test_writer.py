@@ -175,16 +175,19 @@ async def test_writer_persists_evidence_linked_draft_and_generation_metadata(tmp
             playbook=playbook,
         ).write(lead_id=lead.id)
 
-        assert output.prompt_version == "writer:v2"
+        assert output.prompt_version == "writer:v3"
         assert output.playbook_hash == playbook.version_hash
         assert output.strategy_label == "CONVERSION_PROBLEM"
         assert len(provider.calls) == 1
         assert "<html>" not in provider.calls[0]["user"]
+        payload = json.loads(provider.calls[0]["user"])
+        assert payload["rejected_patterns"]
+        assert payload["rejected_patterns"][0]["pattern"]
 
         draft = await session.scalar(select(EmailDraft).where(EmailDraft.lead_id == lead.id))
         assert draft is not None
         assert draft.strategy_id == strategy.id
-        assert draft.writer_prompt_version == "writer:v2"
+        assert draft.writer_prompt_version == "writer:v3"
         assert draft.model_id == "fake-writer-1"
         assert await session.scalar(select(func.count()).select_from(EmailDraftClaim)) == 2
         metadata = await session.scalar(
