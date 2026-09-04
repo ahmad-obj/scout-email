@@ -292,7 +292,7 @@ class CriticService:
     async def _persist(self, *, draft_id: int, result: CriticReviewResult) -> None:
         self.session.add(
             EmailReview(
-                draft_id=draft.id,
+                draft_id=draft_id,
                 decision=result.decision.value,
                 scores_json=result.scores.model_dump_json(),
                 issues_json=json.dumps(result.issues),
