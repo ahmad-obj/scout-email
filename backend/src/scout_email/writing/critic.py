@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -24,7 +24,7 @@ from scout_email.writing.playbook import WritingPlaybook
 from scout_email.writing.schemas import DraftClaim
 
 
-_PROMPT_VERSION = "critic:v2"
+_PROMPT_VERSION = "critic:v3"
 _QUANTIFIED_LOSS = re.compile(
     r"\b(?:los(?:e|ing)|cost(?:s|ing)?|miss(?:ing)?|leav(?:e|ing))\b[^.!?\n]{0,80}\b\d+(?:\.\d+)?\s*%",
     re.IGNORECASE,
@@ -37,6 +37,13 @@ _FAKE_FAMILIARITY = re.compile(
 _GRATUITOUS_PRAISE = re.compile(
     r"\b(?:impressed\s+by|great\s+foundation|vital\s+resource|"
     r"(?:depth|information)[^.!?\n]{0,60}\b(?:excellent|outstanding|amazing|fantastic))\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_AUDIENCE_PERSONA = re.compile(
+    r"\b(?:security[- ]conscious\s+(?:customers?|users?|visitors?)|"
+    r"busy\s+(?:professionals?|customers?|users?)|"
+    r"mobile\s+shoppers?|"
+    r"(?:customers?|users?|professionals?)\s+on\s+the\s+go)\b",
     re.IGNORECASE,
 )
 
@@ -79,6 +86,31 @@ def scan_hard_rejection_issues(
     if _GRATUITOUS_PRAISE.search(body):
         issues.append("gratuitous_praise")
     return issues
+
+
+def scan_quality_issues(
+    *,
+    subject: str,
+    body: str,
+    rejected_patterns: Sequence[Mapping[str, object]] = (),
+) -> list[str]:
+    """Return rewrite-level copy issues that should prevent automatic approval."""
+    rendered = f"{subject}\n{body}"
+    folded = rendered.casefold()
+    issues: list[str] = []
+
+    if _UNSUPPORTED_AUDIENCE_PERSONA.search(rendered):
+        issues.append("unsupported_audience_persona")
+
+    for item in rejected_patterns:
+        pattern = item.get("pattern")
+        if not isinstance(pattern, str):
+            continue
+        normalized = pattern.strip().casefold()
+        if normalized and normalized in folded:
+            issues.append(f"rejected_pattern:{pattern.strip()}")
+
+    return list(dict.fromkeys(issues))
 
 
 class CriticService:
@@ -135,6 +167,14 @@ class CriticService:
             await self._persist(draft_id=draft.id, result=result)
             return result
 
+        rejected_patterns = (
+            list(self.playbook.rejected_patterns) if self.playbook else []
+        )
+        quality_issues = scan_quality_issues(
+            subject=draft.subject,
+            body=draft.body,
+            rejected_patterns=rejected_patterns,
+        )
         evidence_context = await self._evidence_context(lead_id=lead.id, claims=claim_rows)
         generation = await self.gateway.generate(
             task="critic",
@@ -157,22 +197,34 @@ class CriticService:
                     for claim in claim_rows
                 ],
                 "evidence": evidence_context,
+                "deterministic_quality_issues": quality_issues,
                 "review_rules": {
                     "reject_unsupported_claims": True,
                     "rewrite_generic_or_mass_produced_copy": True,
                     "prefer_specific_natural_concise_copy": True,
                     "audit_complete_body_against_claim_ledger": True,
+                    "require_claim_evidence_entailment": True,
+                    "forbid_unsupported_audience_personas": True,
+                    "require_weberaise_claims_from_company_context": True,
+                    "prefer_plain_language_over_agency_abstractions": True,
                     "writing_rules": self.playbook.writing_rules if self.playbook else "",
                     "company_context": self.playbook.company_context if self.playbook else "",
                     "cta_rules": self.playbook.cta_rules if self.playbook else "",
+                    "rejected_patterns": rejected_patterns,
                 },
             },
             response_model=CriticModelOutput,
             prompt_version=_PROMPT_VERSION,
         )
 
+        decision = generation.output.decision
+        if quality_issues and decision == DraftReviewDecision.APPROVE:
+            decision = DraftReviewDecision.REWRITE
+        issues = list(dict.fromkeys([*generation.output.issues, *quality_issues]))
         result = CriticReviewResult(
-            **generation.output.model_dump(),
+            decision=decision,
+            scores=generation.output.scores,
+            issues=issues,
             prompt_version=_PROMPT_VERSION,
             model_id=generation.metadata.model,
         )
