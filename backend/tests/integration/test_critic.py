@@ -108,7 +108,12 @@ async def _seed_draft(session, *, body: str | None = None, evidence_ids: list[in
     return campaign, lead, contact, evidence, draft
 
 
-def _model_review(decision: str = "APPROVE", *, genericness: int = 10) -> str:
+def _model_review(
+    decision: str = "APPROVE",
+    *,
+    genericness: int = 10,
+    evidence_id: int = 1,
+) -> str:
     return json.dumps(
         {
             "decision": decision,
@@ -121,6 +126,19 @@ def _model_review(decision: str = "APPROVE", *, genericness: int = 10) -> str:
                 "spamminess": 8,
             },
             "issues": [] if decision == "APPROVE" else ["Opening could fit unrelated businesses."],
+            "assertion_audits": [
+                {
+                    "body_assertion": "The booking action is easy to miss on mobile.",
+                    "assertion_type": "PROSPECT_FACT",
+                    "ledger_claim": "The mobile booking CTA is difficult to spot.",
+                    "evidence_ids": [evidence_id],
+                    "company_context_quote": None,
+                    "verdict": "ENTAILED",
+                    "explanation": "The wording preserves the persisted observation.",
+                }
+            ],
+            "coverage_complete": True,
+            "copy_abstractions": [],
         }
     )
 
@@ -129,8 +147,8 @@ def _model_review(decision: str = "APPROVE", *, genericness: int = 10) -> str:
 async def test_critic_persists_independent_model_approval(tmp_path):
     engine, factory = await _database(tmp_path)
     async with factory() as session:
-        _campaign, _lead, _contact, _evidence, draft = await _seed_draft(session)
-        provider = FakeProvider([_model_review()])
+        _campaign, _lead, _contact, evidence, draft = await _seed_draft(session)
+        provider = FakeProvider([_model_review(evidence_id=evidence.id)])
         gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
 
         result = await CriticService(session, gateway=gateway).review(draft_id=draft.id)
@@ -225,8 +243,10 @@ async def test_critic_hard_rejects_dnc_and_duplicate_outreach(tmp_path):
 async def test_generic_model_review_requests_rewrite(tmp_path):
     engine, factory = await _database(tmp_path)
     async with factory() as session:
-        _campaign, _lead, _contact, _evidence, draft = await _seed_draft(session)
-        provider = FakeProvider([_model_review("REWRITE", genericness=88)])
+        _campaign, _lead, _contact, evidence, draft = await _seed_draft(session)
+        provider = FakeProvider([
+            _model_review("REWRITE", genericness=88, evidence_id=evidence.id)
+        ])
         gateway = LLMGateway(providers={"fake": provider}, task_routes={"critic": "fake"})
 
         result = await CriticService(session, gateway=gateway).review(draft_id=draft.id)
