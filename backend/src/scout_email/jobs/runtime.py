@@ -336,7 +336,7 @@ def build_handlers(
         loop = WriterCriticQualityLoop(
             session,
             writer=WriterService(session, gateway=gateway, playbook=playbook),
-            critic=CriticService(session, gateway=gateway),
+            critic=CriticService(session, gateway=gateway, playbook=playbook),
         )
         result = await loop.run(lead_id=lead_id)
         return {
