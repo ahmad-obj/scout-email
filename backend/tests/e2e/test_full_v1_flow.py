@@ -391,7 +391,7 @@ def _writer_payload(evidence_id: int):
     }
 
 
-def _critic_approve_payload():
+def _critic_approve_payload(evidence_id: int):
     return {
         "decision": "APPROVE",
         "scores": {
@@ -403,6 +403,37 @@ def _critic_approve_payload():
             "spamminess": 8,
         },
         "issues": [],
+        "assertion_audits": [
+            {
+                "body_assertion": "The booking action on your mobile homepage is easy to miss.",
+                "assertion_type": "PROSPECT_FACT",
+                "ledger_claim": "The booking action on the mobile homepage is easy to miss.",
+                "evidence_ids": [evidence_id],
+                "company_context_quote": None,
+                "verdict": "ENTAILED",
+                "explanation": "The wording preserves the observed booking-path issue.",
+            },
+            {
+                "body_assertion": "That may add friction for visitors trying to book.",
+                "assertion_type": "PROSPECT_INFERENCE",
+                "ledger_claim": "That may add friction for visitors trying to book.",
+                "evidence_ids": [evidence_id],
+                "company_context_quote": None,
+                "verdict": "REASONABLE_INFERENCE",
+                "explanation": "The inference remains cautious and tied to the observation.",
+            },
+            {
+                "body_assertion": "WEBERAISE designs and builds business websites.",
+                "assertion_type": "WEBERAISE_SELF_CLAIM",
+                "ledger_claim": None,
+                "evidence_ids": [],
+                "company_context_quote": "web design and web development agency",
+                "verdict": "ENTAILED",
+                "explanation": "The company context explicitly establishes web design and development.",
+            },
+        ],
+        "coverage_complete": True,
+        "copy_abstractions": [],
     }
 
 
@@ -493,20 +524,25 @@ async def test_full_v1_fixture_flow_reaches_positive_reply_and_is_idempotent(tmp
         critic_provider = StaticProvider(
             name="fixture-critic",
             model="fixture-critic-1",
-            payload=_critic_approve_payload(),
+            payload=_critic_approve_payload(screenshot_evidence.id),
         )
         writing_gateway = LLMGateway(
             providers={"writer": writer_provider, "critic": critic_provider},
             task_routes={"writer": "writer", "critic": "critic"},
         )
+        playbook = load_playbook(PLAYBOOK_DIR)
         quality = await WriterCriticQualityLoop(
             session,
             writer=WriterService(
                 session,
                 gateway=writing_gateway,
-                playbook=load_playbook(PLAYBOOK_DIR),
+                playbook=playbook,
             ),
-            critic=CriticService(session, gateway=writing_gateway),
+            critic=CriticService(
+                session,
+                gateway=writing_gateway,
+                playbook=playbook,
+            ),
         ).run(lead_id=lead.id)
         assert quality.final_decision == "APPROVE"
         assert quality.rewrite_count == 0
