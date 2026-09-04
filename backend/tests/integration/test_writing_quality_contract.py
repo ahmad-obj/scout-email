@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 import scout_email.writing.critic as critic_module
+import scout_email.writing.models as writing_models
 from scout_email.common.enums import ApprovalState, ClaimClass, DraftReviewDecision, LeadState
 from scout_email.db.base import Base
 from scout_email.db.models import (
@@ -14,7 +15,6 @@ from scout_email.db.models import (
     Contact,
     EmailDraft,
     EmailDraftClaim,
-    EmailReview,
     Evidence,
     Lead,
 )
@@ -215,8 +215,8 @@ def test_critic_model_schema_requires_structured_assertion_audit():
     assert {"assertion_audits", "coverage_complete", "copy_abstractions"} <= required
 
 
-def test_email_review_model_persists_structured_audit():
-    assert hasattr(EmailReview, "audit_json")
+def test_structured_audit_has_dedicated_persistence_model():
+    assert hasattr(writing_models, "EmailReviewAudit")
 
 
 def test_original_live_smoke_draft_is_not_allowed_to_pass_hard_language_rules():
@@ -447,6 +447,9 @@ async def test_structured_audit_incomplete_coverage_or_abstraction_cannot_approv
 
 @pytest.mark.asyncio
 async def test_structured_audit_is_persisted_with_effective_review(tmp_path):
+    assert hasattr(writing_models, "EmailReviewAudit")
+    audit_model = writing_models.EmailReviewAudit
+
     engine, factory = await _database(tmp_path)
     async with factory() as session:
         draft = await _seed_reviewable_draft(
@@ -465,7 +468,7 @@ async def test_structured_audit_is_persisted_with_effective_review(tmp_path):
             playbook=load_playbook(PLAYBOOK_DIR),
         ).review(draft_id=draft.id)
         row = await session.scalar(
-            select(EmailReview).where(EmailReview.draft_id == draft.id).order_by(EmailReview.id.desc())
+            select(audit_model).where(audit_model.draft_id == draft.id).order_by(audit_model.id.desc())
         )
 
         assert row is not None
