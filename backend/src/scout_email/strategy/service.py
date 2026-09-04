@@ -28,7 +28,7 @@ class StrategyService:
         session: AsyncSession,
         *,
         gateway: LLMGateway,
-        prompt_version: str = "strategist:v1",
+        prompt_version: str = "strategist:v2",
     ) -> None:
         self.session = session
         self.gateway = gateway
