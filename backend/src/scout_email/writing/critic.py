@@ -20,10 +20,11 @@ from scout_email.db.models import (
     OutboundMessage,
 )
 from scout_email.llm.gateway import LLMGateway
+from scout_email.writing.playbook import WritingPlaybook
 from scout_email.writing.schemas import DraftClaim
 
 
-_PROMPT_VERSION = "critic:v1"
+_PROMPT_VERSION = "critic:v2"
 _QUANTIFIED_LOSS = re.compile(
     r"\b(?:los(?:e|ing)|cost(?:s|ing)?|miss(?:ing)?|leav(?:e|ing))\b[^.!?\n]{0,80}\b\d+(?:\.\d+)?\s*%",
     re.IGNORECASE,
@@ -31,6 +32,11 @@ _QUANTIFIED_LOSS = re.compile(
 _FAKE_FAMILIARITY = re.compile(
     r"\b(?:i(?:'ve| have)\s+been\s+(?:following|watching|tracking)|"
     r"i(?:'ve| have)\s+(?:followed|admired))\b[^.!?\n]{0,100}\b(?:months?|years?)\b",
+    re.IGNORECASE,
+)
+_GRATUITOUS_PRAISE = re.compile(
+    r"\b(?:impressed\s+by|great\s+foundation|vital\s+resource|"
+    r"(?:depth|information)[^.!?\n]{0,60}\b(?:excellent|outstanding|amazing|fantastic))\b",
     re.IGNORECASE,
 )
 
@@ -70,13 +76,22 @@ def scan_hard_rejection_issues(
         issues.append("unsupported_quantified_loss")
     if _FAKE_FAMILIARITY.search(body):
         issues.append("fake_familiarity")
+    if _GRATUITOUS_PRAISE.search(body):
+        issues.append("gratuitous_praise")
     return issues
 
 
 class CriticService:
-    def __init__(self, session: AsyncSession, *, gateway: LLMGateway) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        gateway: LLMGateway,
+        playbook: WritingPlaybook | None = None,
+    ) -> None:
         self.session = session
         self.gateway = gateway
+        self.playbook = playbook
 
     async def review(self, *, draft_id: int) -> CriticReviewResult:
         draft = await self.session.get(EmailDraft, draft_id)
@@ -146,6 +161,10 @@ class CriticService:
                     "reject_unsupported_claims": True,
                     "rewrite_generic_or_mass_produced_copy": True,
                     "prefer_specific_natural_concise_copy": True,
+                    "audit_complete_body_against_claim_ledger": True,
+                    "writing_rules": self.playbook.writing_rules if self.playbook else "",
+                    "company_context": self.playbook.company_context if self.playbook else "",
+                    "cta_rules": self.playbook.cta_rules if self.playbook else "",
                 },
             },
             response_model=CriticModelOutput,
@@ -197,9 +216,7 @@ class CriticService:
     async def _recipient_safety_issues(self, *, lead: Lead) -> list[str]:
         contacts = list(
             (
-                await self.session.scalars(
-                    select(Contact).where(Contact.lead_id == lead.id)
-                )
+                await self.session.scalars(select(Contact).where(Contact.lead_id == lead.id))
             ).all()
         )
         emails = {contact.normalized_email.casefold() for contact in contacts}
@@ -275,7 +292,7 @@ class CriticService:
     async def _persist(self, *, draft_id: int, result: CriticReviewResult) -> None:
         self.session.add(
             EmailReview(
-                draft_id=draft_id,
+                draft_id=draft.id,
                 decision=result.decision.value,
                 scores_json=result.scores.model_dump_json(),
                 issues_json=json.dumps(result.issues),
