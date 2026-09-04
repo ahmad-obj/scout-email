@@ -15,6 +15,24 @@ def _score() -> dict:
     }
 
 
+def test_strategy_json_schema_requires_control_critical_fields():
+    schema = StrategyOutput.model_json_schema()
+
+    required = set(schema["required"])
+    assert {
+        "decision",
+        "candidates",
+        "persuasion_brief",
+        "supporting_evidence_ids",
+        "score_components",
+        "confidence",
+        "rationale",
+    } <= required
+
+    candidate_required = set(schema["$defs"]["OpportunityCandidate"]["required"])
+    assert "safe_to_reference" in candidate_required
+
+
 def test_contact_requires_supporting_evidence():
     with pytest.raises(ValidationError):
         StrategyOutput(
